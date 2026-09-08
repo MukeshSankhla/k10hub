@@ -1,0 +1,76 @@
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { env } from '../config/env';
+
+let supabaseClient: SupabaseClient | null = null;
+
+export function isSupabaseConfigured(): boolean {
+  return Boolean(
+    env.SUPABASE_URL && 
+    (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY) &&
+    !env.SUPABASE_URL.includes('your-project')
+  );
+}
+
+export function getSupabaseClient(): SupabaseClient | null {
+  if (!isSupabaseConfigured()) {
+    return null;
+  }
+  if (!supabaseClient) {
+    const key = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY;
+    supabaseClient = createClient(env.SUPABASE_URL, key, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    });
+  }
+  return supabaseClient;
+}
+
+export interface VerifiedAuthUser {
+  uid: string;
+  email: string;
+  name?: string;
+  avatarUrl?: string;
+}
+
+/**
+ * Verifies a real Supabase Bearer JWT token against Supabase Auth.
+ */
+export async function verifyAuthToken(token: string): Promise<{ user: VerifiedAuthUser | null; error: string | null }> {
+  if (!token) {
+    return { user: null, error: 'No authorization token provided' };
+  }
+
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return {
+      user: null,
+      error: 'Supabase authentication service is not configured on the backend. Please provide SUPABASE_URL and SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY in your backend .env file.',
+    };
+  }
+
+  try {
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) {
+      return { user: null, error: error?.message || 'Invalid or expired authentication session' };
+    }
+
+    const sbUser = data.user;
+    const metadata = sbUser.user_metadata || {};
+    const name = metadata.full_name || metadata.name || sbUser.email?.split('@')[0] || 'K10 Maker';
+    const avatarUrl = metadata.avatar_url || metadata.picture;
+
+    return {
+      user: {
+        uid: sbUser.id,
+        email: sbUser.email || '',
+        name,
+        avatarUrl,
+      },
+      error: null,
+    };
+  } catch (err: any) {
+    return { user: null, error: err.message || 'Token verification error' };
+  }
+}

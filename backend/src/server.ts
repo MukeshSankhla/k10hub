@@ -1,0 +1,106 @@
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
+import path from 'path';
+import fs from 'fs';
+import { env, corsOrigins } from './config/env';
+import { initDatabase } from './db/init';
+
+import healthRoutes from './api/routes/health';
+import projectRoutes from './api/routes/projects';
+import categoryRoutes from './api/routes/categories';
+import authRoutes from './api/routes/auth';
+import adminRoutes from './api/routes/admin';
+
+import rateLimit from 'express-rate-limit';
+
+const app = express();
+
+// Trust reverse proxy if running in production
+if (env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
+// Security and utility middleware
+app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(cors({ origin: corsOrigins, credentials: true }));
+app.use(express.json({ limit: '1mb' }));
+app.use(morgan('dev'));
+
+// General API Rate Limiting (600 requests per 15 min per IP)
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'TOO_MANY_REQUESTS',
+    message: 'Too many requests from this IP. Please try again later.',
+  },
+});
+app.use('/api', globalLimiter);
+
+// Strict Rate Limiting on Authentication Endpoints (60 requests per 15 min per IP)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'AUTH_RATE_LIMITED',
+    message: 'Too many authentication attempts. Please try again after 15 minutes.',
+  },
+});
+
+// API Routes
+app.use('/api/health', healthRoutes);
+app.use('/api/projects', projectRoutes);
+app.use('/api/categories', categoryRoutes);
+app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/admin', adminRoutes);
+
+// Static frontend build serving (production / single-server mode)
+const frontendDist = path.resolve(__dirname, '../../frontend/dist');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+}
+
+// Global error handler
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('API Error:', err);
+  const status = typeof err.status === 'number' ? err.status : 500;
+  const isSafeClientError = status < 500;
+  const isProd = env.NODE_ENV === 'production';
+
+  res.status(status).json({
+    error: err.code || (status === 429 ? 'TOO_MANY_REQUESTS' : 'INTERNAL_SERVER_ERROR'),
+    message: isProd && !isSafeClientError
+      ? 'An unexpected internal server error occurred'
+      : (err.message || 'An unexpected error occurred'),
+  });
+});
+
+async function start() {
+  try {
+    console.log('🔄 Initializing K10 Hub database tables...');
+    await initDatabase();
+
+    app.listen(env.PORT, () => {
+      console.log(`🚀 K10 Hub API server listening on http://${env.HOST}:${env.PORT}`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+start();
+
+export default app;

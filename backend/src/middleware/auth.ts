@@ -1,0 +1,202 @@
+import { Request, Response, NextFunction } from 'express';
+import { eq } from 'drizzle-orm';
+import { db } from '../config/database';
+import { users } from '../db/schema';
+import { verifyAuthToken, VerifiedAuthUser } from '../services/supabase';
+import { env } from '../config/env';
+
+export type UserRole = 'user' | 'author' | 'admin';
+export type UserStatus = 'active' | 'suspended';
+
+export interface DbUser {
+  id: number;
+  supabaseUid: string;
+  email: string;
+  name: string;
+  avatarUrl: string | null;
+  bio?: string | null;
+  githubUrl?: string | null;
+  websiteUrl?: string | null;
+  socialPlatform?: string | null;
+  socialUrl?: string | null;
+  instagramUrl?: string | null;
+  youtubeUrl?: string | null;
+  linkedinUrl?: string | null;
+  role: UserRole;
+  status: UserStatus;
+  authorId: number | null;
+  createdAt: number | null;
+  updatedAt: number | null;
+  lastSignInAt: number | null;
+}
+
+export interface AuthRequest extends Request {
+  user?: DbUser;
+  authUser?: VerifiedAuthUser;
+}
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: DbUser;
+      authUser?: VerifiedAuthUser;
+    }
+  }
+}
+
+/**
+ * Extracts Bearer token from header.
+ */
+function extractToken(req: Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return null;
+  const parts = authHeader.split(' ');
+  if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
+    return parts[1];
+  }
+  return null;
+}
+
+/**
+ * Ensures or provisions a user in the local database based on Supabase identity.
+ */
+export async function syncOrProvisionUser(verified: VerifiedAuthUser): Promise<DbUser> {
+  const normalizedEmail = (verified.email || '').trim().toLowerCase();
+
+  const existing = await db.query.users.findFirst({
+    where: eq(users.supabaseUid, verified.uid),
+  });
+
+  const now = Math.floor(Date.now() / 1000);
+  const adminList = env.ADMIN_EMAILS.split(',').map((e) => e.trim().toLowerCase());
+  const isAdminEmail = Boolean(normalizedEmail && adminList.includes(normalizedEmail));
+
+  if (existing) {
+    // If account is suspended, do not refresh lastSignInAt
+    if (existing.status === 'suspended') {
+      return existing as DbUser;
+    }
+
+    // If admin email changed in config, ensure admin status
+    let role = existing.role as UserRole;
+    if (isAdminEmail && role !== 'admin') {
+      role = 'admin';
+      await db.update(users).set({ role: 'admin', updatedAt: now }).where(eq(users.id, existing.id));
+    }
+
+    // Update last login
+    await db.update(users).set({ lastSignInAt: now }).where(eq(users.id, existing.id));
+    return { ...existing, role, lastSignInAt: now } as DbUser;
+  }
+
+  // Determine initial role (admin if configured in ADMIN_EMAILS, else user)
+  const initialRole: UserRole = isAdminEmail ? 'admin' : 'user';
+
+  const [inserted] = await db
+    .insert(users)
+    .values({
+      supabaseUid: verified.uid,
+      email: normalizedEmail,
+      name: (verified.name || normalizedEmail.split('@')[0] || 'Maker').trim().slice(0, 60),
+      avatarUrl: verified.avatarUrl || null,
+      role: initialRole,
+      status: 'active',
+      lastSignInAt: now,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+
+  return inserted as DbUser;
+}
+
+/**
+ * Middleware: Optional Auth. Populates req.user if a valid token is present, but doesn't block guests.
+ */
+export async function optionalAuth(req: Request, _res: Response, next: NextFunction) {
+  try {
+    const token = extractToken(req);
+    if (!token) return next();
+
+    const { user: verified, error } = await verifyAuthToken(token);
+    if (error || !verified) return next();
+
+    const dbUser = await syncOrProvisionUser(verified);
+    if (dbUser.status !== 'suspended') {
+      req.user = dbUser;
+      req.authUser = verified;
+    }
+  } catch (err) {
+    console.error('optionalAuth error:', err);
+  }
+  next();
+}
+
+/**
+ * Middleware: Required Auth. Returns 401 if missing, invalid, or suspended.
+ */
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const token = extractToken(req);
+  if (!token) {
+    return res.status(401).json({
+      error: 'UNAUTHORIZED',
+      message: 'Authentication required. Please sign in.',
+    });
+  }
+
+  const { user: verified, error } = await verifyAuthToken(token);
+  if (error || !verified) {
+    return res.status(401).json({
+      error: 'INVALID_TOKEN',
+      message: error || 'Your session has expired. Please sign in again.',
+    });
+  }
+
+  try {
+    const dbUser = await syncOrProvisionUser(verified);
+
+    if (dbUser.status === 'suspended') {
+      return res.status(403).json({
+        error: 'ACCOUNT_SUSPENDED',
+        message: 'Your account has been suspended. Please contact platform administrators.',
+      });
+    }
+
+    req.user = dbUser;
+    req.authUser = verified;
+    next();
+  } catch (err: any) {
+    console.error('requireAuth database error:', err);
+    return res.status(500).json({
+      error: 'DATABASE_ERROR',
+      message: 'Could not resolve user profile.',
+    });
+  }
+}
+
+/**
+ * Middleware: Enforce minimum required role(s).
+ */
+export function requireRole(...allowedRoles: UserRole[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({
+        error: 'UNAUTHORIZED',
+        message: 'Authentication required.',
+      });
+    }
+
+    // Admins always have access to everything
+    if (req.user.role === 'admin' || allowedRoles.includes(req.user.role)) {
+      return next();
+    }
+
+    return res.status(403).json({
+      error: 'FORBIDDEN',
+      message: `Access denied. Requires one of roles: [${allowedRoles.join(', ')}]. Current role: ${req.user.role}`,
+    });
+  };
+}
+
+export const requireAdmin = [requireAuth, requireRole('admin')];
+export const requireAuthor = [requireAuth, requireRole('author', 'admin')];
