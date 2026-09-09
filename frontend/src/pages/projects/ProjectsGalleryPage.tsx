@@ -7,6 +7,8 @@ import { ProjectDetail, AVAILABLE_TOPICS } from '../../config/projectsData';
 import {
   getPublicProjects,
   subscribeProjects,
+  resolveProjectAuthor,
+  syncCurrentUserProjects,
 } from '../../services/projects/projectStorageService';
 import UserBadge from '../../components/common/UserBadge';
 import {
@@ -18,7 +20,10 @@ import {
   Calendar,
   LayoutGrid,
   List,
+  Zap,
+  Star,
 } from 'lucide-react';
+import { getLocalFlashCount } from '../../services/flasher/flashCountService';
 
 const LEVEL_CONFIG = [
   {
@@ -99,6 +104,12 @@ export default function ProjectsGalleryPage() {
     });
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    if (user || profile) {
+      syncCurrentUserProjects(user, profile);
+    }
+  }, [user, profile]);
 
   // Filter items by type (Projects vs Tutorials)
   const baseItems = useMemo(() => {
@@ -665,12 +676,16 @@ function ProjectCard({
   isCurrentAuthor,
 }: {
   project: ProjectDetail;
-  isCurrentAuthor: (name: string, id?: string) => boolean;
+  isCurrentAuthor?: (name: string, id?: string) => boolean;
 }) {
-  const isMine = isCurrentAuthor(project.author, project.authorId);
+  const { user, profile } = useAuth();
+  const authorInfo = resolveProjectAuthor(project, user, profile);
+  const isMine =
+    authorInfo.isCurrentUser ||
+    (isCurrentAuthor ? isCurrentAuthor(project.author, project.authorId) : false);
   const authorProfileUrl = isMine
     ? '/profile'
-    : `/profile/${encodeURIComponent(project.authorId || project.author)}`;
+    : `/profile/${encodeURIComponent(authorInfo.authorId || authorInfo.name)}`;
 
   return (
     <div
@@ -722,6 +737,33 @@ function ProjectCard({
           >
             {getLevelLabel(project.level)}
           </div>
+
+          {/* Featured Pill if marked as featured */}
+          {(project.featured || project.isFeatured) && (
+            <div
+              style={{
+                position: 'absolute',
+                bottom: 10,
+                left: 10,
+                backgroundColor: 'rgba(245, 158, 11, 0.95)',
+                backdropFilter: 'blur(4px)',
+                color: '#fff',
+                fontSize: '9.5px',
+                fontWeight: 700,
+                padding: '2px 7px',
+                borderRadius: '4px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                zIndex: 2,
+                boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+              }}
+            >
+              <Star size={10} fill="#fff" /> Featured
+            </div>
+          )}
 
           {/* Diagonal Top-Right Corner Ribbon Indicator */}
           <div
@@ -806,12 +848,12 @@ function ProjectCard({
               textDecoration: 'none',
               color: 'inherit',
             }}
-            title={isMine ? 'View your profile' : `View ${project.author}'s profile`}
+            title={isMine ? 'View your profile' : `View ${authorInfo.name}'s profile`}
           >
-            {project.authorAvatar ? (
+            {authorInfo.avatarUrl ? (
               <img
-                src={project.authorAvatar}
-                alt={project.author}
+                src={authorInfo.avatarUrl}
+                alt={authorInfo.name}
                 style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover' }}
               />
             ) : (
@@ -829,7 +871,7 @@ function ProjectCard({
                   justifyContent: 'center',
                 }}
               >
-                {project.author.charAt(0)}
+                {authorInfo.name.charAt(0)}
               </div>
             )}
             <span
@@ -843,13 +885,13 @@ function ProjectCard({
                 whiteSpace: 'nowrap',
               }}
             >
-              {project.author}
+              {authorInfo.name}
             </span>
             <UserBadge
               role={
-                project.authorRole?.toLowerCase().includes('admin')
+                authorInfo.role?.toLowerCase().includes('admin')
                   ? 'admin'
-                  : project.authorRole?.toLowerCase().includes('author') || project.author === 'Mukesh Sankhla'
+                  : authorInfo.role?.toLowerCase().includes('author') || authorInfo.isCurrentUser
                   ? 'author'
                   : 'user'
               }
@@ -857,19 +899,36 @@ function ProjectCard({
             />
           </Link>
 
-          {/* Date with Calendar icon */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              fontSize: '11px',
-              fontWeight: 500,
-              color: 'var(--color-ink-tertiary)',
-            }}
-          >
-            <Calendar size={12} style={{ color: 'var(--color-ink-tertiary)' }} />
-            <span>{project.publishDate || 'Recent'}</span>
+          {/* Date & Flash Count */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+                fontSize: '11px',
+                fontWeight: 600,
+                color: 'var(--color-accent)',
+              }}
+              title={`${Math.max(project.flashCount || 0, getLocalFlashCount(project.id))} hardware flashes`}
+            >
+              <Zap size={11} fill="currentColor" />
+              <span>{Math.max(project.flashCount || 0, getLocalFlashCount(project.id))}</span>
+            </span>
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontSize: '11px',
+                fontWeight: 500,
+                color: 'var(--color-ink-tertiary)',
+              }}
+            >
+              <Calendar size={12} style={{ color: 'var(--color-ink-tertiary)' }} />
+              <span>{project.publishDate || 'Recent'}</span>
+            </div>
           </div>
         </div>
       </div>

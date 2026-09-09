@@ -92,6 +92,269 @@ export function isProjectAuthor(
   return false;
 }
 
+const AUTHORS_CACHE_KEY = 'k10_authors_profile_cache';
+
+export interface CachedAuthorProfile {
+  id?: string;
+  name: string;
+  avatarUrl?: string;
+  role?: string;
+  email?: string;
+  updatedAt?: number;
+}
+
+export function getKnownAuthorsCache(): Record<string, CachedAuthorProfile> {
+  try {
+    const raw = localStorage.getItem(AUTHORS_CACHE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveKnownAuthor(author: CachedAuthorProfile): void {
+  if (!author || (!author.id && !author.name && !author.email)) return;
+  try {
+    const cache = getKnownAuthorsCache();
+    const entry: CachedAuthorProfile = {
+      ...author,
+      updatedAt: Date.now(),
+    };
+    if (author.id) cache[String(author.id).toLowerCase()] = entry;
+    if (author.email) cache[author.email.toLowerCase()] = entry;
+    if (author.name) cache[author.name.toLowerCase()] = entry;
+    localStorage.setItem(AUTHORS_CACHE_KEY, JSON.stringify(cache));
+  } catch (err) {
+    console.warn('Failed to cache author profile:', err);
+  }
+}
+
+export interface ResolvedAuthor {
+  name: string;
+  avatarUrl?: string;
+  role?: string;
+  authorId?: string;
+  isCurrentUser: boolean;
+}
+
+/**
+ * Dynamically resolves author information (name, avatar, role, and ID) for a project.
+ * If the project belongs to the currently logged in user, it returns their live profile.
+ * Otherwise, checks the cached author directory or falls back to project snapshot fields.
+ */
+export function resolveProjectAuthor(
+  project?: ProjectDetail | null,
+  currentUser?: any,
+  currentProfile?: any
+): ResolvedAuthor {
+  if (!project) {
+    return {
+      name: 'Unknown Maker',
+      avatarUrl: '',
+      role: 'user',
+      authorId: '',
+      isCurrentUser: false,
+    };
+  }
+
+  // 1. If currently logged in user is the author, ALWAYS return their live profile!
+  if (currentUser || currentProfile) {
+    if (isProjectAuthor(project, currentUser, currentProfile)) {
+      const liveName =
+        currentProfile?.name ||
+        currentUser?.user_metadata?.name ||
+        currentUser?.user_metadata?.full_name ||
+        currentUser?.email?.split('@')[0] ||
+        project.author ||
+        'Maker';
+      const liveAvatar =
+        currentProfile?.avatarUrl ||
+        currentUser?.user_metadata?.avatar_url ||
+        project.authorAvatar ||
+        '';
+      const liveRole =
+        currentProfile?.role ||
+        project.authorRole ||
+        'author';
+      const liveId = String(currentProfile?.id || currentUser?.id || project.authorId || '');
+
+      return {
+        name: liveName,
+        avatarUrl: liveAvatar,
+        role: liveRole,
+        authorId: liveId,
+        isCurrentUser: true,
+      };
+    }
+  }
+
+  // 2. Check author cache by authorId, authorEmail, or authorName
+  const cache = getKnownAuthorsCache();
+  const idKey = project.authorId ? String(project.authorId).toLowerCase() : '';
+  const emailKey = project.authorEmail ? project.authorEmail.toLowerCase() : '';
+  const nameKey = project.author ? project.author.toLowerCase() : '';
+
+  const cached =
+    (idKey && cache[idKey]) ||
+    (emailKey && cache[emailKey]) ||
+    (nameKey && cache[nameKey]);
+
+  if (cached && cached.name) {
+    return {
+      name: cached.name,
+      avatarUrl: cached.avatarUrl || project.authorAvatar || '',
+      role: cached.role || project.authorRole || 'author',
+      authorId: cached.id || project.authorId || '',
+      isCurrentUser: false,
+    };
+  }
+
+  // 3. Fallback to static snapshot on project
+  return {
+    name: project.author || 'Maker',
+    avatarUrl: project.authorAvatar || '',
+    role: project.authorRole || 'author',
+    authorId: project.authorId || '',
+    isCurrentUser: false,
+  };
+}
+
+/**
+ * Synchronizes author profile changes across all stored projects belonging to this author.
+ */
+export function syncAuthorProfileAcrossProjects(
+  authorIdentifier: {
+    id?: string | number | null;
+    email?: string | null;
+    name?: string | null;
+  },
+  updates: {
+    name?: string;
+    avatarUrl?: string;
+    role?: string;
+    email?: string;
+  }
+): number {
+  const all = getStoredProjects();
+  if (!Array.isArray(all) || all.length === 0) return 0;
+
+  const targetId =
+    authorIdentifier.id !== undefined && authorIdentifier.id !== null
+      ? String(authorIdentifier.id).toLowerCase()
+      : '';
+  const targetEmail = (authorIdentifier.email || '').trim().toLowerCase();
+  const targetName = (authorIdentifier.name || '').trim().toLowerCase();
+
+  let modifiedCount = 0;
+
+  const updatedProjects = all.map((project) => {
+    const pId = project.authorId ? String(project.authorId).toLowerCase() : '';
+    const pEmail = (project.authorEmail || '').trim().toLowerCase();
+    const pName = (project.author || '').trim().toLowerCase();
+
+    // Match if IDs match
+    const matchId = Boolean(targetId && pId && pId === targetId);
+    // Match if Emails match
+    const matchEmail = Boolean(targetEmail && pEmail && pEmail === targetEmail);
+    // Match if Names match
+    const matchName = Boolean(
+      targetName && pName && (pName === targetName || pName.includes(targetName) || targetName.includes(pName))
+    );
+
+    if (matchId || matchEmail || matchName) {
+      modifiedCount++;
+      return {
+        ...project,
+        author: updates.name !== undefined && updates.name.trim() ? updates.name.trim() : project.author,
+        authorAvatar: updates.avatarUrl !== undefined ? updates.avatarUrl : project.authorAvatar,
+        authorRole: updates.role !== undefined ? updates.role : project.authorRole,
+        authorId: targetId ? String(authorIdentifier.id) : project.authorId,
+        authorEmail: updates.email || authorIdentifier.email || project.authorEmail,
+      };
+    }
+
+    return project;
+  });
+
+  if (modifiedCount > 0) {
+    persistProjects(updatedProjects);
+  }
+
+  // Update known author cache
+  saveKnownAuthor({
+    id: targetId || undefined,
+    email: targetEmail || undefined,
+    name: updates.name || authorIdentifier.name || '',
+    avatarUrl: updates.avatarUrl,
+    role: updates.role,
+  });
+
+  return modifiedCount;
+}
+
+/**
+ * Automatically inspects stored projects and retro-links them to the currently authenticated user
+ * if they were created by them.
+ */
+export function syncCurrentUserProjects(currentUser?: any, currentProfile?: any): number {
+  if (!currentUser && !currentProfile) return 0;
+
+  const userId =
+    currentProfile?.id !== undefined && currentProfile?.id !== null
+      ? String(currentProfile.id)
+      : (currentUser?.id ? String(currentUser.id) : '');
+  const userEmail = currentProfile?.email || currentUser?.email || '';
+  const userName =
+    currentProfile?.name ||
+    currentUser?.user_metadata?.name ||
+    currentUser?.user_metadata?.full_name ||
+    (userEmail ? userEmail.split('@')[0] : '');
+  const userAvatar = currentProfile?.avatarUrl || currentUser?.user_metadata?.avatar_url || '';
+  const userRole = currentProfile?.role || 'author';
+
+  if (!userName && !userId) return 0;
+
+  const all = getStoredProjects();
+  let modifiedCount = 0;
+
+  const updatedProjects = all.map((project) => {
+    if (isProjectAuthor(project, currentUser, currentProfile)) {
+      const needsUpdate =
+        project.author !== userName ||
+        project.authorAvatar !== userAvatar ||
+        (userId && project.authorId !== userId) ||
+        (userRole && project.authorRole !== userRole);
+
+      if (needsUpdate) {
+        modifiedCount++;
+        return {
+          ...project,
+          author: userName || project.author,
+          authorAvatar: userAvatar || project.authorAvatar,
+          authorRole: userRole || project.authorRole,
+          authorId: userId || project.authorId,
+          authorEmail: userEmail || project.authorEmail,
+        };
+      }
+    }
+    return project;
+  });
+
+  if (modifiedCount > 0) {
+    persistProjects(updatedProjects);
+  }
+
+  saveKnownAuthor({
+    id: userId,
+    email: userEmail,
+    name: userName,
+    avatarUrl: userAvatar,
+    role: userRole,
+  });
+
+  return modifiedCount;
+}
+
 function persistProjects(projects: ProjectDetail[]): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
@@ -179,6 +442,8 @@ export function saveProject(project: ProjectDetail): ProjectDetail {
     projectMdFile: normalizeMarkdownUrl(project.projectMdFile) || null,
     license: project.license || 'MIT',
     flashCount: typeof project.flashCount === 'number' ? project.flashCount : 0,
+    featured: Boolean(project.featured ?? project.isFeatured ?? false),
+    isFeatured: Boolean(project.featured ?? project.isFeatured ?? false),
     firmwares,
   };
 
@@ -191,6 +456,54 @@ export function saveProject(project: ProjectDetail): ProjectDetail {
 
   persistProjects(all);
   return toSave;
+}
+
+/**
+ * Admin action: toggles featured status of a project or tutorial.
+ */
+export function toggleFeaturedProject(id: string): boolean {
+  if (!id) return false;
+  const cleanId = id.trim().toLowerCase();
+  const all = getStoredProjects();
+  const project = all.find((p) => p.id.toLowerCase() === cleanId);
+  if (!project) return false;
+
+  const nextVal = !(project.featured || project.isFeatured);
+  project.featured = nextVal;
+  project.isFeatured = nextVal;
+
+  persistProjects(all);
+  return true;
+}
+
+/**
+ * Admin action: sets explicit featured status of a project or tutorial.
+ */
+export function setProjectFeatured(id: string, featured: boolean): boolean {
+  if (!id) return false;
+  const cleanId = id.trim().toLowerCase();
+  const all = getStoredProjects();
+  const project = all.find((p) => p.id.toLowerCase() === cleanId);
+  if (!project) return false;
+
+  project.featured = featured;
+  project.isFeatured = featured;
+
+  persistProjects(all);
+  return true;
+}
+
+/**
+ * Returns all featured public projects and tutorials.
+ */
+export function getFeaturedProjects(): ProjectDetail[] {
+  const publicList = getPublicProjects();
+  const explicitlyFeatured = publicList.filter((p) => p.featured || p.isFeatured);
+  if (explicitlyFeatured.length > 0) {
+    return explicitlyFeatured;
+  }
+  // Fallback: return top published projects
+  return publicList.slice(0, 6);
 }
 
 /**

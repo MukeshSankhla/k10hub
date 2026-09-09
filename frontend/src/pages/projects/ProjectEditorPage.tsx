@@ -3,6 +3,7 @@ import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
 import { useAuth } from '../../contexts/AuthContext';
+import { toast } from '../../contexts/ToastContext';
 import { ProjectDetail, FirmwareConfig, AVAILABLE_TOPICS } from '../../config/projectsData';
 import {
   getProjectById,
@@ -110,7 +111,7 @@ export default function ProjectEditorPage() {
       const existing = getProjectById(paramId);
       if (existing) {
         setExistingProject(existing);
-        const authorized = role === 'admin' || isProjectAuthor(existing, user, profile);
+        const authorized = (role === 'author' || role === 'admin') && isProjectAuthor(existing, user, profile);
         setHasEditPermission(authorized);
 
         if (authorized) {
@@ -148,10 +149,11 @@ export default function ProjectEditorPage() {
         setFormError(`Project with ID "${paramId}" was not found.`);
       }
     } else {
-      setHasEditPermission(true);
+      const canCreate = role === 'author' || role === 'admin';
+      setHasEditPermission(canCreate);
       setStatus('draft');
     }
-  }, [isEditing, paramId, user, profile]);
+  }, [isEditing, paramId, user, profile, role]);
 
   // Test fetch remote .md file for live preview
   const handleTestFetchMd = async () => {
@@ -197,7 +199,7 @@ export default function ProjectEditorPage() {
 
   const handleRemoveFirmware = (idx: number) => {
     if (firmwares.length <= 1) {
-      alert('You must have at least one firmware build configured.');
+      toast.warning('You must have at least one firmware build configured.', 'Firmware Required');
       return;
     }
     setFirmwares(firmwares.filter((_, i) => i !== idx));
@@ -261,8 +263,13 @@ export default function ProjectEditorPage() {
     }
 
     // Check permission if editing
-    if (isEditing && existingProject && !isProjectAuthor(existingProject, user, profile)) {
-      setFormError('Permission denied: Only the project author can edit this project.');
+    if (isEditing && existingProject && !((role === 'author' || role === 'admin') && isProjectAuthor(existingProject, user, profile))) {
+      setFormError('Permission denied: Only the original author has permission to edit this project or tutorial.');
+      return;
+    }
+
+    if (!isEditing && role !== 'admin' && role !== 'author') {
+      setFormError('Permission denied: Active Author privileges are required to create projects.');
       return;
     }
 
@@ -287,11 +294,21 @@ export default function ProjectEditorPage() {
           releaseDate: f.releaseDate && f.releaseDate.trim() ? f.releaseDate : currentDate,
         }));
 
-      const finalAuthor = isEditing && existingProject ? existingProject.author : currentAuthorName;
-      const finalAuthorId = isEditing && existingProject ? existingProject.authorId : currentAuthorId;
-      const finalAuthorRole = isEditing && existingProject ? existingProject.authorRole : currentAuthorRole;
-      const finalAuthorAvatar = isEditing && existingProject ? existingProject.authorAvatar : currentAuthorAvatar;
-      const finalAuthorEmail = isEditing && existingProject ? (existingProject.authorEmail || profile?.email || user?.email || '') : (profile?.email || user?.email || '');
+      const finalAuthorId = currentAuthorId || (isEditing && existingProject ? existingProject.authorId : '');
+      const finalAuthor =
+        isProjectAuthor(existingProject, user, profile) || !existingProject
+          ? currentAuthorName
+          : (existingProject?.author || currentAuthorName);
+      const finalAuthorRole =
+        isProjectAuthor(existingProject, user, profile) || !existingProject
+          ? currentAuthorRole
+          : (existingProject?.authorRole || currentAuthorRole);
+      const finalAuthorAvatar =
+        isProjectAuthor(existingProject, user, profile) || !existingProject
+          ? currentAuthorAvatar
+          : (existingProject?.authorAvatar || currentAuthorAvatar);
+      const finalAuthorEmail =
+        profile?.email || user?.email || existingProject?.authorEmail || '';
 
       const projectToSave: ProjectDetail = {
         id: cleanSlug,
@@ -323,12 +340,19 @@ export default function ProjectEditorPage() {
       setIsSaving(false);
 
       if (nextStatus === 'pending_approval') {
-        alert('Your project has been submitted for Admin Verification! Once verified, it will be published to the public catalog.');
+        toast.success(
+          'Your project has been submitted for Admin Verification! Once verified, it will be published to the public catalog.',
+          'Submitted for Review'
+        );
         navigate('/profile?tab=review#contributed-projects');
       } else if (nextStatus === 'draft') {
-        alert('Draft saved successfully! You can access it anytime in your Profile under the Draft tab.');
+        toast.success(
+          'Draft saved successfully! You can access it anytime in your Profile under the Draft tab.',
+          'Draft Saved'
+        );
         navigate('/profile?tab=draft#contributed-projects');
       } else {
+        toast.success('Project published successfully!', 'Published');
         // Navigate to project detail page
         navigate(`/project/${cleanSlug}`);
       }
@@ -354,8 +378,8 @@ export default function ProjectEditorPage() {
               {!user
                 ? 'You must be signed in with an Author account to create or edit projects.'
                 : isEditing
-                ? `Only the project author (${existingProject?.author || 'the author'}) has permission to edit this ${existingProject?.type || 'project'}.`
-                : 'Makers do not have permission to publish or create new projects. Apply to become a Verified Author in your profile to publish guides and firmware builds.'}
+                ? `Only the original author has permission to edit this ${existingProject?.type || 'project'}.`
+                : 'Active Author privileges are required to create and publish projects or tutorials.'}
             </p>
             <div style={{ display: 'flex', justifyContent: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
               {!user ? (

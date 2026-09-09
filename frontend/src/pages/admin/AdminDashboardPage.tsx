@@ -10,7 +10,11 @@ import {
   rejectProject,
   deleteProject,
   subscribeProjects,
+  toggleFeaturedProject,
+  isProjectAuthor,
 } from '../../services/projects/projectStorageService';
+import { useAuth } from '../../contexts/AuthContext';
+import { toast } from '../../contexts/ToastContext';
 import UserBadge from '../../components/common/UserBadge';
 import {
   Users,
@@ -34,15 +38,18 @@ import {
   RotateCcw,
   ShieldAlert,
   Github,
+  Star,
+  Zap,
 } from 'lucide-react';
 
 export default function AdminDashboardPage() {
+  const { user, profile } = useAuth();
   const [activeTab, setActiveTab] = useState<'users' | 'applications' | 'projects'>('users');
   const [stats, setStats] = useState<AdminStats | null>(null);
 
   // Projects Verification & Moderation State
   const [projectsList, setProjectsList] = useState<ProjectDetail[]>(() => getAllProjects());
-  const [projectStatusFilter, setProjectStatusFilter] = useState<'all' | 'pending_approval' | 'published' | 'draft' | 'rejected'>('all');
+  const [projectStatusFilter, setProjectStatusFilter] = useState<'all' | 'featured' | 'pending_approval' | 'published' | 'draft' | 'rejected'>('all');
   const [projectSearchQuery, setProjectSearchQuery] = useState('');
 
   // Users state
@@ -321,13 +328,33 @@ export default function AdminDashboardPage() {
   };
 
   const handleDeleteProject = (id: string, title: string) => {
-    if (window.confirm(`Are you sure you want to permanently remove "${title}"?`)) {
-      const success = deleteProject(id);
-      if (success) {
-        setActionMessage({ type: 'success', text: `Deleted "${title}".` });
-        setProjectsList(getAllProjects());
-      }
-    }
+    toast.confirm({
+      title: 'Delete Project',
+      message: `Are you sure you want to permanently remove "${title}"? This cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      type: 'danger',
+      onConfirm: () => {
+        const success = deleteProject(id);
+        if (success) {
+          toast.success(`Deleted "${title}".`, 'Project Removed');
+          setActionMessage({ type: 'success', text: `Deleted "${title}".` });
+          setProjectsList(getAllProjects());
+        }
+      },
+    });
+  };
+
+  const handleToggleFeatured = (id: string, title: string) => {
+    toggleFeaturedProject(id);
+    const updated = getAllProjects();
+    setProjectsList(updated);
+    const curr = updated.find((p) => p.id === id);
+    const isNow = Boolean(curr?.featured || curr?.isFeatured);
+    setActionMessage({
+      type: 'success',
+      text: isNow ? `"${title}" is now featured on the Home page.` : `"${title}" removed from Home featured section.`,
+    });
   };
 
   return (
@@ -1197,7 +1224,8 @@ export default function AdminDashboardPage() {
                 {/* Status Filter Buttons */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                   {[
-                    { key: 'all', label: 'All Projects', count: projectsList.length },
+                    { key: 'all', label: 'All Items', count: projectsList.length },
+                    { key: 'featured', label: '⭐ Featured', count: projectsList.filter(p => p.featured || p.isFeatured).length },
                     { key: 'pending_approval', label: 'Pending Review', count: projectsList.filter(p => p.status === 'pending_approval').length },
                     { key: 'published', label: 'Published & Live', count: projectsList.filter(p => p.status === 'published' || !p.status).length },
                     { key: 'draft', label: 'Drafts', count: projectsList.filter(p => p.status === 'draft').length },
@@ -1259,6 +1287,8 @@ export default function AdminDashboardPage() {
                         const matchesFilter =
                           projectStatusFilter === 'all'
                             ? true
+                            : projectStatusFilter === 'featured'
+                            ? Boolean(p.featured || p.isFeatured)
                             : projectStatusFilter === 'published'
                             ? p.status === 'published' || !p.status
                             : p.status === projectStatusFilter;
@@ -1283,12 +1313,33 @@ export default function AdminDashboardPage() {
                                 style={{ width: 48, height: 36, borderRadius: '6px', objectFit: 'cover', border: '1px solid var(--color-border)' }}
                               />
                               <div>
-                                <Link
-                                  to={`/project/${p.id}`}
-                                  style={{ fontWeight: 700, color: 'var(--color-ink-primary)', textDecoration: 'none', fontSize: 'var(--text-sm)' }}
-                                >
-                                  {p.title}
-                                </Link>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <Link
+                                    to={`/project/${p.id}`}
+                                    style={{ fontWeight: 700, color: 'var(--color-ink-primary)', textDecoration: 'none', fontSize: 'var(--text-sm)' }}
+                                  >
+                                    {p.title}
+                                  </Link>
+                                  {(p.featured || p.isFeatured) && (
+                                    <span
+                                      style={{
+                                        fontSize: '9px',
+                                        fontWeight: 700,
+                                        backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                                        color: '#d97706',
+                                        border: '1px solid rgba(245, 158, 11, 0.35)',
+                                        borderRadius: '4px',
+                                        padding: '1px 5px',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '2px',
+                                        lineHeight: 1.3,
+                                      }}
+                                    >
+                                      <Star size={9} fill="#d97706" /> FEATURED
+                                    </span>
+                                  )}
+                                </div>
                                 <div style={{ fontSize: '11px', color: 'var(--color-ink-tertiary)', fontFamily: 'monospace' }}>
                                   slug: {p.id}
                                 </div>
@@ -1372,14 +1423,39 @@ export default function AdminDashboardPage() {
                             </span>
                           </td>
 
-                          {/* Firmwares count */}
+                          {/* Firmwares count & Flashes */}
                           <td style={{ padding: 'var(--space-3)', fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)' }}>
-                            {p.firmwares?.length || 0} build(s)
+                            <div>{p.firmwares?.length || 0} build(s)</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: 'var(--color-accent)', fontWeight: 600, fontSize: '11px', marginTop: '2px' }}>
+                              <Zap size={11} fill="currentColor" /> {p.flashCount || 0} flashes
+                            </div>
                           </td>
 
                           {/* Moderation Actions */}
                           <td style={{ padding: 'var(--space-3)', textAlign: 'right' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px' }}>
+                              {/* 1-Click Feature Toggle */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleFeatured(p.id, p.title)}
+                                className="btn btn--sm"
+                                style={{
+                                  backgroundColor: (p.featured || p.isFeatured) ? 'rgba(245, 158, 11, 0.15)' : 'var(--color-paper)',
+                                  color: (p.featured || p.isFeatured) ? '#d97706' : 'var(--color-ink-secondary)',
+                                  border: (p.featured || p.isFeatured) ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid var(--color-border)',
+                                  padding: '4px 8px',
+                                  fontSize: '11px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  cursor: 'pointer',
+                                }}
+                                title={(p.featured || p.isFeatured) ? 'Remove from Home featured section' : 'Feature on Home page'}
+                              >
+                                <Star size={12} fill={(p.featured || p.isFeatured) ? '#f59e0b' : 'none'} color={(p.featured || p.isFeatured) ? '#f59e0b' : 'currentColor'} />
+                                <span>{(p.featured || p.isFeatured) ? 'Featured' : 'Feature'}</span>
+                              </button>
+
                               {/* 1-Click Approve & Publish */}
                               {(p.status !== 'published') && (
                                 <button
@@ -1433,14 +1509,16 @@ export default function AdminDashboardPage() {
                                 <Eye size={13} />
                               </Link>
 
-                              <Link
-                                to={`/project/${p.id}/edit`}
-                                className="btn btn--secondary btn--sm"
-                                style={{ padding: '4px 8px', fontSize: '11px' }}
-                                title="Edit Project Details"
-                              >
-                                <Edit size={13} />
-                              </Link>
+                              {isProjectAuthor(p, user, profile) && (
+                                <Link
+                                  to={`/project/${p.id}/edit`}
+                                  className="btn btn--secondary btn--sm"
+                                  style={{ padding: '4px 8px', fontSize: '11px' }}
+                                  title="Edit Project Details"
+                                >
+                                  <Edit size={13} />
+                                </Link>
+                              )}
 
                               <button
                                 type="button"

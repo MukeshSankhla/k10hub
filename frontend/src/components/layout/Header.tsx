@@ -9,7 +9,6 @@ import {
   LogOut,
   ChevronDown,
   Sparkles,
-  FolderGit2,
   Search,
   BookOpen,
   Cpu,
@@ -17,7 +16,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import UserBadge from '../common/UserBadge';
-import { getPublicProjects } from '../../services/projects/projectStorageService';
+import { getPublicProjects, resolveProjectAuthor } from '../../services/projects/projectStorageService';
 
 const NAV_LINKS = [
   { label: 'Projects', href: '/projects' },
@@ -97,23 +96,28 @@ export default function Header() {
   const authorMap = new Map<string, { name: string; avatar?: string; role?: string; id?: string }>();
   if (cleanSearch) {
     allProjects.forEach((p) => {
-      if (p.author && !authorMap.has(p.author.toLowerCase())) {
-        authorMap.set(p.author.toLowerCase(), {
-          name: p.author,
-          avatar: p.authorAvatar,
-          role: p.authorRole,
-          id: p.authorId,
+      const authorInfo = resolveProjectAuthor(p, user, profile);
+      const key = (authorInfo.authorId || authorInfo.name).toLowerCase();
+      if (authorInfo.name && !authorMap.has(key)) {
+        authorMap.set(key, {
+          name: authorInfo.name,
+          avatar: authorInfo.avatarUrl,
+          role: authorInfo.role,
+          id: authorInfo.authorId,
         });
       }
     });
 
-    if (profile?.name && !authorMap.has(profile.name.toLowerCase())) {
-      authorMap.set(profile.name.toLowerCase(), {
-        name: profile.name,
-        avatar: profile.avatarUrl || user?.user_metadata?.avatar_url,
-        role: role || 'user',
-        id: String(profile.id || user?.id || ''),
-      });
+    if (profile?.name) {
+      const selfKey = String(profile.id || user?.id || profile.name).toLowerCase();
+      if (!authorMap.has(selfKey)) {
+        authorMap.set(selfKey, {
+          name: profile.name,
+          avatar: profile.avatarUrl || user?.user_metadata?.avatar_url,
+          role: role || 'user',
+          id: String(profile.id || user?.id || ''),
+        });
+      }
     }
   }
 
@@ -557,27 +561,6 @@ export default function Header() {
                       <User size={15} /> My Profile
                     </Link>
 
-                    {(role === 'author' || role === 'admin') && (
-                      <Link
-                        to="/profile#contributed-projects"
-                        onClick={() => setUserDropdownOpen(false)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.6rem',
-                          padding: '8px 12px',
-                          fontSize: '13.5px',
-                          fontWeight: 500,
-                          color: 'var(--color-ink-primary)',
-                          textDecoration: 'none',
-                          borderRadius: 'var(--radius-md)',
-                        }}
-                        className="nav__dropdown-item"
-                      >
-                        <FolderGit2 size={15} /> My Projects & Drafts
-                      </Link>
-                    )}
-
                     {role === 'admin' && (
                       <Link
                         to="/admin"
@@ -786,22 +769,6 @@ export default function Header() {
               >
                 Profile ({displayName})
               </Link>
-              {(role === 'author' || role === 'admin') && (
-                <Link
-                  to="/profile#contributed-projects"
-                  onClick={() => setMobileOpen(false)}
-                  style={{
-                    display: 'block',
-                    padding: 'var(--space-3) var(--space-4)',
-                    fontSize: 'var(--text-base)',
-                    fontWeight: 600,
-                    color: 'var(--color-ink-primary)',
-                    textDecoration: 'none',
-                  }}
-                >
-                  My Projects & Drafts
-                </Link>
-              )}
               {role === 'admin' && (
                 <Link
                   to="/admin"

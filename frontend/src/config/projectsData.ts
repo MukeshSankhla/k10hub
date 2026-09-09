@@ -24,6 +24,8 @@ export interface ProjectDetail {
   status?: 'draft' | 'pending_approval' | 'published' | 'rejected';
   visibility?: 'draft' | 'public';
   flashCount: number;
+  featured?: boolean;
+  isFeatured?: boolean;
   description: string;
   coverImage: string;
   docLink?: string;

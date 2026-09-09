@@ -18,6 +18,7 @@ import {
   Video,
   AlertCircle,
   Clock,
+  Star,
 } from 'lucide-react';
 import { subscribeProjectFlashCount } from '../../services/flasher/flashCountService';
 import {
@@ -25,12 +26,15 @@ import {
   subscribeProjects,
   parseVideoEmbedUrl,
   isProjectAuthor,
+  toggleFeaturedProject,
+  resolveProjectAuthor,
 } from '../../services/projects/projectStorageService';
 import UserBadge from '../../components/common/UserBadge';
+import { toast } from '../../contexts/ToastContext';
 
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { user, profile } = useAuth();
+  const { user, profile, role } = useAuth();
 
   const [currentProject, setCurrentProject] = useState<ProjectDetail | undefined>(() =>
     id ? getStoredProjectById(id) : undefined
@@ -90,6 +94,7 @@ export default function ProjectDetailPage() {
 
   const project = currentProject;
   const isAuthor = isProjectAuthor(project, user, profile);
+  const canEdit = (role === 'author' || role === 'admin') && isAuthor;
   const parsedVideo = parseVideoEmbedUrl(project.videoLink);
 
   const handleFlashSuccess = () => {
@@ -100,6 +105,7 @@ export default function ProjectDetailPage() {
     if (navigator.clipboard) {
       navigator.clipboard.writeText(window.location.href).then(() => {
         setCopiedLink(true);
+        toast.success('Project link copied to clipboard!');
         setTimeout(() => setCopiedLink(false), 1500);
       });
     }
@@ -258,24 +264,63 @@ export default function ProjectDetailPage() {
                       <span>{project.type || 'Project'}</span>
                     </span>
 
-                    {/* Level Badge */}
-                    <span
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        padding: '3px 10px',
-                        borderRadius: '6px',
-                        backgroundColor: 'rgba(37, 99, 235, 0.08)',
-                        border: '1px solid rgba(37, 99, 235, 0.2)',
-                        color: 'rgb(37, 99, 235)',
-                      }}
-                    >
-                      <Award size={13} />
-                      <span>Level {project.level} · Advanced</span>
-                    </span>
+                    {/* Level / Difficulty Badge */}
+                    {(() => {
+                      const lvlNum = Number(project.level) || 1;
+                      const LEVEL_MAP: Record<number, { name: string; color: string; bg: string; border: string }> = {
+                        1: {
+                          name: 'Beginner',
+                          color: '#16a34a',
+                          bg: 'rgba(22, 163, 74, 0.08)',
+                          border: 'rgba(22, 163, 74, 0.25)',
+                        },
+                        2: {
+                          name: 'Intermediate',
+                          color: '#0284c7',
+                          bg: 'rgba(2, 132, 199, 0.08)',
+                          border: 'rgba(2, 132, 199, 0.25)',
+                        },
+                        3: {
+                          name: 'Advanced',
+                          color: '#7c3aed',
+                          bg: 'rgba(124, 58, 237, 0.08)',
+                          border: 'rgba(124, 58, 237, 0.25)',
+                        },
+                        4: {
+                          name: 'Expert',
+                          color: '#ea580c',
+                          bg: 'rgba(234, 88, 12, 0.08)',
+                          border: 'rgba(234, 88, 12, 0.25)',
+                        },
+                      };
+
+                      const lvlInfo = LEVEL_MAP[lvlNum] || {
+                        name: typeof project.level === 'string' && project.level ? project.level : 'Beginner',
+                        color: '#0284c7',
+                        bg: 'rgba(2, 132, 199, 0.08)',
+                        border: 'rgba(2, 132, 199, 0.25)',
+                      };
+
+                      return (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            padding: '3px 10px',
+                            borderRadius: '6px',
+                            backgroundColor: lvlInfo.bg,
+                            border: `1px solid ${lvlInfo.border}`,
+                            color: lvlInfo.color,
+                          }}
+                        >
+                          <Award size={13} />
+                          <span>{lvlInfo.name}</span>
+                        </span>
+                      );
+                    })()}
 
                     {/* Flash Count Badge */}
                     <span
@@ -295,6 +340,27 @@ export default function ProjectDetailPage() {
                       <Flame size={13} />
                       <span>{flashCount} Flashes</span>
                     </span>
+
+                    {/* Published Date Badge */}
+                    {project.publishDate && (
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          padding: '3px 10px',
+                          borderRadius: '6px',
+                          backgroundColor: 'var(--color-paper)',
+                          border: '1px solid var(--color-border)',
+                          color: 'var(--color-ink-secondary)',
+                        }}
+                      >
+                        <Clock size={13} />
+                        <span>{project.publishDate}</span>
+                      </span>
+                    )}
                   </div>
 
                   {/* Main Title */}
@@ -325,175 +391,158 @@ export default function ProjectDetailPage() {
                   </p>
                 </div>
 
-                {/* Bottom Extreme Block: Author Profile Card & Actions */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', marginTop: 'var(--space-6)' }}>
-                  {/* Author Row (Clickable Profile Link) */}
-                  {(() => {
-                    const isMine =
-                      (project.authorEmail && (project.authorEmail.toLowerCase() === (profile?.email || user?.email || '').toLowerCase())) ||
-                      (project.authorId && (String(project.authorId).toLowerCase() === String(profile?.id || user?.id || '').toLowerCase())) ||
-                      (project.author && (project.author.toLowerCase() === (profile?.name || user?.user_metadata?.name || '').toLowerCase()));
+                {/* Bottom Actions Row: Author Button & Action Buttons on Same Line */}
+                {(() => {
+                  const heroBtnStyle: React.CSSProperties = {
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.45rem',
+                    height: '36px',
+                    padding: '0 13px',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    borderRadius: '8px',
+                    boxSizing: 'border-box',
+                    textDecoration: 'none',
+                  };
 
-                    const authorProfileUrl = isMine
-                      ? '/profile'
-                      : `/profile/${encodeURIComponent(project.authorId || project.author)}`;
+                  const authorInfo = resolveProjectAuthor(project, user, profile);
+                  const isMine =
+                    authorInfo.isCurrentUser ||
+                    (project.authorEmail && (project.authorEmail.toLowerCase() === (profile?.email || user?.email || '').toLowerCase())) ||
+                    (project.authorId && (String(project.authorId).toLowerCase() === String(profile?.id || user?.id || '').toLowerCase()));
 
-                    return (
+                  const authorProfileUrl = isMine
+                    ? '/profile'
+                    : `/profile/${encodeURIComponent(authorInfo.authorId || authorInfo.name)}`;
+
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap', marginTop: 'var(--space-6)' }}>
+                      {/* Author Profile Button */}
                       <Link
                         to={authorProfileUrl}
+                        className="btn btn--secondary"
                         style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '12px',
-                          textDecoration: 'none',
-                          color: 'inherit',
-                          width: 'fit-content',
-                          padding: '6px 12px 6px 6px',
-                          borderRadius: 'var(--radius-lg)',
-                          backgroundColor: 'var(--color-paper)',
-                          border: '1px solid var(--color-border)',
-                          transition: 'all 0.15s ease',
+                          ...heroBtnStyle,
+                          fontWeight: 600,
                         }}
-                        title={isMine ? 'View your profile' : `View ${project.author}'s profile`}
+                        title={isMine ? 'View your profile' : `View ${authorInfo.name}'s profile`}
                       >
-                        {/* Author Avatar with Cyan-Blue Gradient Ring */}
-                        <div
-                          style={{
-                            position: 'relative',
-                            width: 44,
-                            height: 44,
-                            borderRadius: '50%',
-                            padding: '2px',
-                            background: 'linear-gradient(135deg, #0284c7, #38bdf8)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            flexShrink: 0,
-                            boxShadow: '0 0 10px rgba(56, 189, 248, 0.3)',
-                          }}
-                        >
-                          {project.authorAvatar ? (
-                            <img
-                              src={project.authorAvatar}
-                              alt={project.author}
-                              style={{
-                                width: '100%',
-                                height: '100%',
-                                borderRadius: '50%',
-                                objectFit: 'cover',
-                                display: 'block',
-                              }}
-                            />
-                          ) : (
-                            <div
-                              style={{
-                                width: '100%',
-                                height: '100%',
-                                borderRadius: '50%',
-                                backgroundColor: 'var(--color-surface)',
-                                color: 'var(--color-accent)',
-                                fontWeight: 700,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontSize: '14px',
-                              }}
-                            >
-                              {project.author.charAt(0)}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Author Name with Blue Verified Badge + Published Info */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span
-                              style={{
-                                fontWeight: 700,
-                                fontSize: '15px',
-                                color: 'var(--color-ink-primary)',
-                                lineHeight: 1.2,
-                              }}
-                            >
-                              {project.author}
-                            </span>
-                            <UserBadge
-                              role={
-                                project.authorRole?.toLowerCase().includes('admin')
-                                  ? 'admin'
-                                  : project.authorRole?.toLowerCase().includes('author') || project.author === 'Mukesh Sankhla'
-                                  ? 'author'
-                                  : 'user'
-                              }
-                              size={17}
-                            />
-                          </div>
+                        {authorInfo.avatarUrl ? (
+                          <img
+                            src={authorInfo.avatarUrl}
+                            alt={authorInfo.name}
+                            style={{
+                              width: 20,
+                              height: 20,
+                              borderRadius: '50%',
+                              objectFit: 'cover',
+                              display: 'block',
+                            }}
+                          />
+                        ) : (
                           <span
                             style={{
-                              fontSize: '12px',
-                              color: 'var(--color-ink-tertiary)',
-                              lineHeight: 1.3,
+                              width: 20,
+                              height: 20,
+                              borderRadius: '50%',
+                              backgroundColor: 'var(--color-surface)',
+                              color: 'var(--color-accent)',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
                             }}
                           >
-                            Published {project.publishDate} © {project.license || 'MIT'}
+                            {authorInfo.name.charAt(0)}
                           </span>
-                        </div>
+                        )}
+                        <span>{authorInfo.name}</span>
+                        <UserBadge
+                          role={
+                            authorInfo.role?.toLowerCase().includes('admin')
+                              ? 'admin'
+                              : authorInfo.role?.toLowerCase().includes('author') || authorInfo.isCurrentUser
+                              ? 'author'
+                              : 'user'
+                          }
+                          size={14}
+                        />
                       </Link>
-                    );
-                  })()}
 
-                  {/* Action Buttons Row */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-                    {project.githubLink && (
-                      <a
-                        href={project.githubLink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="btn btn--secondary btn--sm"
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', borderRadius: '8px' }}
+                      {project.githubLink && (
+                        <a
+                          href={project.githubLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="btn btn--secondary"
+                          style={heroBtnStyle}
+                        >
+                          <Github size={15} />
+                          <span>GitHub Source</span>
+                        </a>
+                      )}
+
+                      {project.docLink && (
+                        <a
+                          href={project.docLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="btn btn--secondary"
+                          style={heroBtnStyle}
+                        >
+                          <ExternalLink size={15} />
+                          <span>Project Guide</span>
+                        </a>
+                      )}
+
+                      {canEdit && (
+                        <Link
+                          to={`/project/${project.id}/edit`}
+                          className="btn btn--secondary"
+                          title="Edit Project / Tutorial"
+                          style={heroBtnStyle}
+                        >
+                          <Edit3 size={15} />
+                          <span>Edit {project.type || 'Project'}</span>
+                        </Link>
+                      )}
+
+                      {role === 'admin' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            toggleFeaturedProject(project.id);
+                            setCurrentProject(getStoredProjectById(project.id));
+                          }}
+                          className="btn btn--secondary"
+                          style={{
+                            ...heroBtnStyle,
+                            color: (project.featured || project.isFeatured) ? '#d97706' : 'var(--color-ink-secondary)',
+                            backgroundColor: (project.featured || project.isFeatured) ? 'rgba(245, 158, 11, 0.12)' : undefined,
+                            borderColor: (project.featured || project.isFeatured) ? 'rgba(245, 158, 11, 0.4)' : undefined,
+                          }}
+                          title={(project.featured || project.isFeatured) ? 'Unfeature this project' : 'Feature this project on Home'}
+                        >
+                          <Star size={15} fill={(project.featured || project.isFeatured) ? '#f59e0b' : 'none'} color={(project.featured || project.isFeatured) ? '#f59e0b' : 'currentColor'} />
+                          <span>{(project.featured || project.isFeatured) ? 'Featured' : 'Feature'}</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={handleShare}
+                        className="btn btn--secondary"
+                        title="Copy Share Link"
+                        style={heroBtnStyle}
                       >
-                        <Github size={14} />
-                        <span>GitHub Source</span>
-                      </a>
-                    )}
-
-                    {project.docLink && (
-                      <a
-                        href={project.docLink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="btn btn--secondary btn--sm"
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', borderRadius: '8px' }}
-                      >
-                        <ExternalLink size={14} />
-                        <span>Project Guide</span>
-                      </a>
-                    )}
-
-                    {isAuthor && (
-                      <Link
-                        to={`/project/${project.id}/edit`}
-                        className="btn btn--secondary btn--sm"
-                        title="Edit Project / Tutorial"
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', borderRadius: '8px', textDecoration: 'none' }}
-                      >
-                        <Edit3 size={14} />
-                        <span>Edit {project.type || 'Project'}</span>
-                      </Link>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={handleShare}
-                      className="btn btn--secondary btn--sm"
-                      title="Copy Share Link"
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', borderRadius: '8px' }}
-                    >
-                      <Share2 size={14} />
-                      <span>{copiedLink ? 'Link Copied!' : 'Share'}</span>
-                    </button>
-                  </div>
-                </div>
+                        <Share2 size={15} />
+                        <span>{copiedLink ? 'Link Copied!' : 'Share'}</span>
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Hero Right: Cover Image (4:3 Ratio, height 100% matching Left Extreme) */}

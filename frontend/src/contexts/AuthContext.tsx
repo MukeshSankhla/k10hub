@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { api, setAuthTokenGetter, UserProfile, AuthorApplication, UserRole, ProjectSummary } from '../services/api';
+import { syncCurrentUserProjects, syncAuthorProfileAcrossProjects } from '../services/projects/projectStorageService';
 
 interface AuthContextType {
   user: any | null;
@@ -212,12 +213,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const res = await api.auth.updateProfile(data);
       setProfile(res.user);
+      if (res.user) {
+        syncAuthorProfileAcrossProjects(
+          {
+            id: res.user.id,
+            email: res.user.email,
+            name: res.user.name,
+          },
+          {
+            name: res.user.name,
+            avatarUrl: res.user.avatarUrl || undefined,
+            role: res.user.role,
+            email: res.user.email,
+          }
+        );
+      }
       await fetchBackendProfile();
       return { success: true, message: res.message };
     } catch (err: any) {
       return { success: false, error: err.message || 'Failed to update profile' };
     }
   };
+
+  // Sync projects belonging to current user when auth state changes
+  useEffect(() => {
+    if (user || profile) {
+      syncCurrentUserProjects(user, profile);
+    }
+  }, [user, profile]);
 
   // Submit author verification application
   const applyAuthor = async (data: Parameters<typeof api.auth.applyAuthor>[0]) => {

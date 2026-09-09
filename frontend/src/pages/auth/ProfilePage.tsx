@@ -29,15 +29,63 @@ import {
   ShieldAlert,
   Mail,
   ArrowLeft,
+  Lock,
+  AlertTriangle,
 } from 'lucide-react';
 import { ProjectDetail } from '../../config/projectsData';
+import { toast } from '../../contexts/ToastContext';
 import {
   getAllProjects,
   deleteProject,
   subscribeProjects,
   isProjectAuthor,
+  syncAuthorProfileAcrossProjects,
+  syncCurrentUserProjects,
+  saveKnownAuthor,
 } from '../../services/projects/projectStorageService';
+import { getLocalFlashCount, subscribeProjectFlashCount } from '../../services/flasher/flashCountService';
 import UserBadge from '../../components/common/UserBadge';
+
+function ProjectFlashCount({ projectId, initialCount = 0 }: { projectId: string; initialCount?: number }) {
+  const [count, setCount] = useState<number>(() => Math.max(initialCount || 0, getLocalFlashCount(projectId)));
+
+  useEffect(() => {
+    if (!projectId) return;
+    setCount(Math.max(initialCount || 0, getLocalFlashCount(projectId)));
+    const unsubscribe = subscribeProjectFlashCount(projectId, (liveCount) => {
+      setCount(Math.max(liveCount, initialCount || 0));
+    });
+    return unsubscribe;
+  }, [projectId, initialCount]);
+
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '4px',
+        color: 'var(--color-accent)',
+        fontWeight: 600,
+        fontSize: '11px',
+      }}
+      title={`${count} successful web flashes`}
+    >
+      <Zap size={12} /> {count} flashes
+    </span>
+  );
+}
+
+const getNameLockStorageKey = (idOrEmail: string) => `k10_name_locked_${idOrEmail.trim().toLowerCase()}`;
+
+function isNameChangeLocked(idOrEmail?: string): boolean {
+  if (!idOrEmail) return false;
+  return localStorage.getItem(getNameLockStorageKey(idOrEmail)) === 'true';
+}
+
+function lockNameChange(idOrEmail?: string): void {
+  if (!idOrEmail) return;
+  localStorage.setItem(getNameLockStorageKey(idOrEmail), 'true');
+}
 
 export default function ProfilePage() {
   const {
@@ -74,11 +122,27 @@ export default function ProfilePage() {
     if (!isOwnProfile && identifier) {
       api.auth.getPublicProfile(identifier)
         .then((res) => {
-          if (res && res.user) setPublicUser(res.user);
+          if (res && res.user) {
+            setPublicUser(res.user);
+            saveKnownAuthor({
+              id: res.user.id ? String(res.user.id) : undefined,
+              name: res.user.name,
+              avatarUrl: res.user.avatarUrl || undefined,
+              role: res.user.role,
+              email: res.user.email,
+            });
+          }
         })
         .catch(() => {});
     }
   }, [isOwnProfile, identifier]);
+
+  // Ensure current user's projects are linked and synchronized
+  useEffect(() => {
+    if (user || profile) {
+      syncCurrentUserProjects(user, profile);
+    }
+  }, [user, profile]);
 
   // Author Project / Tutorial Management State (Filtered to author)
   const [allProjects, setAllProjects] = useState<ProjectDetail[]>(() => getAllProjects());
@@ -148,15 +212,44 @@ export default function ProfilePage() {
     }, { replace: true });
   };
 
-  const displayedProjects = projectsList.filter((p) => {
-    if (projectStatusFilter === 'published') return p.status === 'published' || !p.status;
-    return p.status === projectStatusFilter;
-  });
+  const [projectTypeFilter, setProjectTypeFilter] = useState<'all' | 'Project' | 'Tutorial'>('all');
+
+  const statusFilteredProjects = useMemo(() => {
+    return projectsList.filter((p) => {
+      if (!isOwnProfile) return p.status === 'published' || !p.status;
+      if (projectStatusFilter === 'published') return p.status === 'published' || !p.status;
+      return p.status === projectStatusFilter;
+    });
+  }, [projectsList, isOwnProfile, projectStatusFilter]);
+
+  const displayedProjects = useMemo(() => {
+    return statusFilteredProjects.filter((p) => {
+      if (projectTypeFilter === 'all') return true;
+      const pType = (p.type || 'Project').toLowerCase();
+      return pType === projectTypeFilter.toLowerCase();
+    });
+  }, [statusFilteredProjects, projectTypeFilter]);
+
+  const typeCounts = useMemo(() => {
+    return {
+      all: statusFilteredProjects.length,
+      project: statusFilteredProjects.filter(p => (p.type || 'Project').toLowerCase() === 'project').length,
+      tutorial: statusFilteredProjects.filter(p => (p.type || '').toLowerCase() === 'tutorial').length,
+    };
+  }, [statusFilteredProjects]);
 
   const handleDeleteProject = (id: string, title: string) => {
-    if (window.confirm(`Are you sure you want to delete "${title}"? This will remove the project and its firmware binaries.`)) {
-      deleteProject(id);
-    }
+    toast.confirm({
+      title: 'Delete Project',
+      message: `Are you sure you want to delete "${title}"? This will permanently remove the project and its firmware binaries.`,
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      type: 'danger',
+      onConfirm: () => {
+        deleteProject(id);
+        toast.success(`Project "${title}" has been deleted.`);
+      },
+    });
   };
 
   // Author Application Modal state
@@ -187,6 +280,18 @@ export default function ProfilePage() {
   const [editSuccessMsg, setEditSuccessMsg] = useState('');
   const [editFieldErrors, setEditFieldErrors] = useState<{ name?: string }>({});
 
+  const userKey = useMemo(() => {
+    return String(profile?.id || user?.id || profile?.email || user?.email || '').trim().toLowerCase();
+  }, [profile, user]);
+
+  const [isNameLocked, setIsNameLocked] = useState<boolean>(() => isNameChangeLocked(userKey));
+
+  useEffect(() => {
+    if (userKey) {
+      setIsNameLocked(isNameChangeLocked(userKey));
+    }
+  }, [userKey, showEditModal]);
+
   // Only initialize defaults on initial load, NEVER overwrite while modal is open or tab is switched
   const hasInitializedEdit = React.useRef(false);
   useEffect(() => {
@@ -209,6 +314,9 @@ export default function ProfilePage() {
     setEditError('');
     setEditSuccessMsg('');
     setEditFieldErrors({});
+    if (userKey) {
+      setIsNameLocked(isNameChangeLocked(userKey));
+    }
     if (profile) {
       setEditName(profile.name || user?.user_metadata?.name || '');
       setEditAvatarUrl(profile.avatarUrl || user?.user_metadata?.avatar_url || '');
@@ -226,7 +334,7 @@ export default function ProfilePage() {
 
   const handleOpenApplyModal = () => {
     if (application && application.status === 'approved' && role === 'user') {
-      alert('You were previously an approved Author and your role was demoted. Please contact the Platform Administrator at admin@k10hub.io to request reinstatement.');
+      toast.error('You were previously an approved Author and your role was demoted. Please contact the Platform Administrator at admin@k10hub.io to request reinstatement.');
       return;
     }
     setAppSubmitError('');
@@ -288,18 +396,7 @@ export default function ProfilePage() {
     }
   };
 
-  const handleEditProfileSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setEditError('');
-    setEditSuccessMsg('');
-    setEditFieldErrors({});
-
-    if (!editName.trim()) {
-      setEditFieldErrors({ name: 'Display Name is required.' });
-      setEditError('Please fill in the required Display Name.');
-      return;
-    }
-
+  const executeSaveProfile = async (shouldLockName: boolean) => {
     setEditSubmitting(true);
 
     const res = await updateProfile({
@@ -319,13 +416,75 @@ export default function ProfilePage() {
 
     if (!res.success) {
       setEditError(res.error || 'Failed to save profile changes');
+      toast.error(res.error || 'Failed to save profile changes');
     } else {
+      if (shouldLockName && userKey) {
+        lockNameChange(userKey);
+        setIsNameLocked(true);
+      }
+
+      // Synchronize updated author profile across all projects owned by this user
+      syncAuthorProfileAcrossProjects(
+        {
+          id: profile?.id || user?.id,
+          email: profile?.email || user?.email,
+          name: profile?.name || user?.user_metadata?.name || user?.user_metadata?.full_name,
+        },
+        {
+          name: editName.trim(),
+          avatarUrl: editAvatarUrl.trim(),
+          role: role,
+          email: profile?.email || user?.email,
+        }
+      );
+
+      toast.success(shouldLockName ? 'Profile updated and display name permanently locked!' : 'Profile updated successfully!');
       setEditSuccessMsg('Profile updated successfully!');
       setTimeout(() => {
         setEditSuccessMsg('');
         setShowEditModal(false);
-      }, 1000);
+      }, 700);
     }
+  };
+
+  const handleEditProfileSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setEditError('');
+    setEditSuccessMsg('');
+    setEditFieldErrors({});
+
+    const trimmedName = editName.trim();
+    if (!trimmedName) {
+      setEditFieldErrors({ name: 'Display Name is required.' });
+      setEditError('Please fill in the required Display Name.');
+      return;
+    }
+
+    const currentSavedName = (profile?.name || user?.user_metadata?.name || user?.user_metadata?.full_name || '').trim();
+    const isNameAltered = trimmedName !== currentSavedName;
+
+    if (isNameAltered && isNameLocked) {
+      toast.error('Display Name cannot be changed. The lifetime one-time limit has been reached.');
+      setEditName(currentSavedName);
+      return;
+    }
+
+    if (isNameAltered && !isNameLocked) {
+      toast.confirm({
+        title: 'Confirm Lifetime Name Change',
+        message: `Are you sure you want to change your Display Name to "${trimmedName}"? You can only change your name ONCE in your account's lifetime. Once saved, it will be permanently locked and cannot be changed again.`,
+        confirmLabel: 'Confirm & Lock Name',
+        cancelLabel: 'Cancel',
+        type: 'warning',
+        onConfirm: async () => {
+          await executeSaveProfile(true);
+        },
+      });
+      return;
+    }
+
+    // Name did not change, saving other profile fields
+    await executeSaveProfile(false);
   };
 
   const displayName = isOwnProfile
@@ -611,67 +770,92 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          {/* Author: Creator Studio Welcome (Only on own profile) */}
+          {/* Author: Creator Studio Action Bar (Only on own profile) */}
           {isOwnProfile && (role === 'author' || role === 'admin') && (
             <div
               style={{
                 backgroundColor: 'var(--color-surface)',
                 border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-xl)',
-                padding: 'var(--space-8)',
-                boxShadow: 'var(--shadow-sm)',
-                marginBottom: 'var(--space-8)',
+                borderRadius: 'var(--radius-lg)',
+                padding: '0.75rem 1.25rem',
+                boxShadow: 'var(--shadow-xs, 0 1px 2px rgba(0,0,0,0.04))',
+                marginBottom: 'var(--space-6)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: 'var(--space-3)',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                <div
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: 'var(--radius-md)',
+                    backgroundColor: 'rgba(37, 99, 235, 0.08)',
+                    color: 'rgb(37, 99, 235)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Cpu size={16} />
+                </div>
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', color: 'rgb(37, 99, 235)', marginBottom: 'var(--space-1)' }}>
-                    <Cpu size={18} />
-                    <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                    <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-ink-primary)' }}>
                       Creator Studio
                     </span>
+                    <span
+                      style={{
+                        fontSize: '0.6875rem',
+                        fontWeight: 600,
+                        padding: '1px 6px',
+                        borderRadius: '999px',
+                        backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                        color: 'rgb(22, 163, 74)',
+                      }}
+                    >
+                      Author
+                    </span>
                   </div>
-                  <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: 'var(--color-ink-primary)', margin: 0 }}>
-                    Author Creator Center
-                  </h2>
-                  <p style={{ color: 'var(--color-ink-secondary)', fontSize: 'var(--text-sm)', marginTop: 'var(--space-1)' }}>
-                    You have verified Author access. Share UNIHIKER K10 tutorials, firmware, and open-source schematics.
+                  <p style={{ color: 'var(--color-ink-muted)', fontSize: 'var(--text-xs)', margin: 0 }}>
+                    Share UNIHIKER K10 tutorials, firmware, and projects
                   </p>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                  <Link
-                    to="/project/new?type=Project"
-                    className="btn btn--primary"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none' }}
-                  >
-                    <Plus size={16} /> New Project
-                  </Link>
-                  <Link
-                    to="/project/new?type=Tutorial"
-                    className="btn btn--secondary"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none' }}
-                  >
-                    <BookOpen size={16} /> New Tutorial
-                  </Link>
                 </div>
               </div>
 
-              <div
-                style={{
-                  padding: 'var(--space-4)',
-                  backgroundColor: 'var(--color-paper)',
-                  borderRadius: 'var(--radius-lg)',
-                  border: '1px solid var(--color-border)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-3)',
-                }}
-              >
-                <CheckCircle2 size={18} color="rgb(34, 197, 94)" />
-                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)' }}>
-                  Your author credentials are fully active. Your verified creator badge is visible across the community.
-                </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                <Link
+                  to="/project/new?type=Project"
+                  className="btn btn--primary"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    padding: '0.4rem 0.85rem',
+                    fontSize: 'var(--text-xs)',
+                    textDecoration: 'none',
+                  }}
+                >
+                  <Plus size={14} /> New Project
+                </Link>
+                <Link
+                  to="/project/new?type=Tutorial"
+                  className="btn btn--secondary"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    padding: '0.4rem 0.85rem',
+                    fontSize: 'var(--text-xs)',
+                    textDecoration: 'none',
+                  }}
+                >
+                  <BookOpen size={14} /> New Tutorial
+                </Link>
               </div>
             </div>
           )}
@@ -718,37 +902,170 @@ export default function ProfilePage() {
                 </div>
               </div>
 
-              {/* Status Filter Tabs (Published, Draft, Review) - Only for own profile */}
-              {isOwnProfile && (
-                <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-6)', flexWrap: 'wrap' }}>
-                  {[
-                    { id: 'published', label: 'Published', count: projectsList.filter(p => p.status === 'published' || !p.status).length },
-                    { id: 'draft', label: 'Draft', count: projectsList.filter(p => p.status === 'draft').length },
-                    { id: 'pending_approval', label: 'Review', count: projectsList.filter(p => p.status === 'pending_approval').length },
-                  ].map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => handleSelectTab(tab.id as any)}
-                      className={`btn btn--sm ${projectStatusFilter === tab.id ? 'btn--primary' : 'btn--secondary'}`}
-                      style={{ fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                    >
-                      <span>{tab.label}</span>
-                      <span
-                        style={{
-                          backgroundColor: projectStatusFilter === tab.id ? 'rgba(255,255,255,0.25)' : 'var(--color-paper)',
-                          borderRadius: 'var(--radius-full)',
-                          padding: '1px 6px',
-                          fontSize: '10px',
-                          fontWeight: 700,
-                        }}
+              {/* Filter Toolbar: Status Tabs & Type Filter Pills */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 'var(--space-3)',
+                  marginBottom: 'var(--space-6)',
+                  flexWrap: 'wrap',
+                }}
+              >
+                {/* Left: Status Filter Tabs (Published, Draft, Review) - Only for own profile */}
+                {isOwnProfile ? (
+                  <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                    {[
+                      { id: 'published', label: 'Published', count: projectsList.filter(p => p.status === 'published' || !p.status).length },
+                      { id: 'draft', label: 'Draft', count: projectsList.filter(p => p.status === 'draft').length },
+                      { id: 'pending_approval', label: 'Review', count: projectsList.filter(p => p.status === 'pending_approval').length },
+                    ].map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => handleSelectTab(tab.id as any)}
+                        className={`btn btn--sm ${projectStatusFilter === tab.id ? 'btn--primary' : 'btn--secondary'}`}
+                        style={{ fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                       >
-                        {tab.count}
-                      </span>
-                    </button>
-                  ))}
+                        <span>{tab.label}</span>
+                        <span
+                          style={{
+                            backgroundColor: projectStatusFilter === tab.id ? 'rgba(255,255,255,0.25)' : 'var(--color-paper)',
+                            borderRadius: 'var(--radius-full)',
+                            padding: '1px 6px',
+                            fontSize: '10px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {tab.count}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', fontWeight: 600 }}>
+                    <span>Published Works</span>
+                  </div>
+                )}
+
+                {/* Right: Type Filter Pills (All Types, Projects, Tutorials) */}
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    backgroundColor: 'var(--color-paper)',
+                    border: '1px solid var(--color-border)',
+                    padding: '3px 4px',
+                    borderRadius: 'var(--radius-lg)',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setProjectTypeFilter('all')}
+                    style={{
+                      border: 'none',
+                      outline: 'none',
+                      cursor: 'pointer',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      padding: '4px 10px',
+                      borderRadius: 'var(--radius-md)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      backgroundColor: projectTypeFilter === 'all' ? 'var(--color-accent)' : 'transparent',
+                      color: projectTypeFilter === 'all' ? '#ffffff' : 'var(--color-ink-secondary)',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <span>All Types</span>
+                    <span
+                      style={{
+                        fontSize: '10px',
+                        padding: '1px 5px',
+                        borderRadius: '999px',
+                        backgroundColor: projectTypeFilter === 'all' ? 'rgba(255,255,255,0.25)' : 'var(--color-bg)',
+                        color: projectTypeFilter === 'all' ? '#ffffff' : 'var(--color-ink-tertiary)',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {typeCounts.all}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setProjectTypeFilter('Project')}
+                    style={{
+                      border: 'none',
+                      outline: 'none',
+                      cursor: 'pointer',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      padding: '4px 10px',
+                      borderRadius: 'var(--radius-md)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      backgroundColor: projectTypeFilter === 'Project' ? 'var(--color-accent)' : 'transparent',
+                      color: projectTypeFilter === 'Project' ? '#ffffff' : 'var(--color-ink-secondary)',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <Cpu size={12} />
+                    <span>Projects</span>
+                    <span
+                      style={{
+                        fontSize: '10px',
+                        padding: '1px 5px',
+                        borderRadius: '999px',
+                        backgroundColor: projectTypeFilter === 'Project' ? 'rgba(255,255,255,0.25)' : 'var(--color-bg)',
+                        color: projectTypeFilter === 'Project' ? '#ffffff' : 'var(--color-ink-tertiary)',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {typeCounts.project}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setProjectTypeFilter('Tutorial')}
+                    style={{
+                      border: 'none',
+                      outline: 'none',
+                      cursor: 'pointer',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      padding: '4px 10px',
+                      borderRadius: 'var(--radius-md)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      backgroundColor: projectTypeFilter === 'Tutorial' ? 'var(--color-accent)' : 'transparent',
+                      color: projectTypeFilter === 'Tutorial' ? '#ffffff' : 'var(--color-ink-secondary)',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <BookOpen size={12} />
+                    <span>Tutorials</span>
+                    <span
+                      style={{
+                        fontSize: '10px',
+                        padding: '1px 5px',
+                        borderRadius: '999px',
+                        backgroundColor: projectTypeFilter === 'Tutorial' ? 'rgba(255,255,255,0.25)' : 'var(--color-bg)',
+                        color: projectTypeFilter === 'Tutorial' ? '#ffffff' : 'var(--color-ink-tertiary)',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {typeCounts.tutorial}
+                    </span>
+                  </button>
                 </div>
-              )}
+              </div>
 
               {displayedProjects && displayedProjects.length > 0 ? (
                 <div
@@ -771,7 +1088,17 @@ export default function ProfilePage() {
                       }}
                     >
                       {/* Cover Thumbnail */}
-                      <div style={{ height: 140, backgroundColor: '#0f172a', position: 'relative', overflow: 'hidden' }}>
+                      <Link
+                        to={`/project/${project.id}`}
+                        style={{
+                          height: 140,
+                          backgroundColor: '#0f172a',
+                          position: 'relative',
+                          overflow: 'hidden',
+                          display: 'block',
+                          textDecoration: 'none',
+                        }}
+                      >
                         {project.coverImage ? (
                           <img
                             src={project.coverImage}
@@ -828,12 +1155,14 @@ export default function ProfilePage() {
                         >
                           {project.status === 'pending_approval' ? 'In Review' : (project.status || 'Published')}
                         </span>
-                      </div>
+                      </Link>
 
                       {/* Content */}
                       <div style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', flex: 1 }}>
                         <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 var(--space-2) 0', color: 'var(--color-ink-primary)', lineHeight: 1.4 }}>
-                          {project.title}
+                          <Link to={`/project/${project.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                            {project.title}
+                          </Link>
                         </h3>
                         <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', margin: '0 0 var(--space-4) 0', lineHeight: 1.5, flex: 1, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                           {project.description}
@@ -845,80 +1174,175 @@ export default function ProfilePage() {
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
-                            paddingTop: 'var(--space-2)',
-                            paddingBottom: 'var(--space-3)',
+                            paddingTop: 'var(--space-3)',
+                            marginTop: 'auto',
                             borderTop: '1px solid var(--color-border)',
                             fontSize: '11px',
                             color: 'var(--color-ink-tertiary)',
                           }}
                         >
                           <span>{project.publishDate || 'Recent'}</span>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: 'var(--color-accent)', fontWeight: 600 }}>
-                            <Zap size={12} /> {project.flashCount || 0} flashes
-                          </span>
+                          <ProjectFlashCount projectId={project.id} initialCount={project.flashCount} />
                         </div>
 
                         {/* Author Management Action Toolbar */}
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 'var(--space-2)',
-                            paddingTop: 'var(--space-2)',
-                            borderTop: '1px solid var(--color-border)',
-                          }}
-                        >
-                          <Link
-                            to={`/project/${project.id}/edit`}
-                            className="btn btn--secondary btn--sm"
+                        {isOwnProfile ? (
+                          <div
                             style={{
-                              flex: 1,
-                              display: 'inline-flex',
+                              display: 'flex',
                               alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: '0.3rem',
-                              fontSize: 'var(--text-xs)',
-                              padding: '6px 10px',
-                              textDecoration: 'none',
+                              gap: '8px',
+                              paddingTop: 'var(--space-3)',
+                              marginTop: 'var(--space-2)',
+                              borderTop: '1px solid var(--color-border)',
+                              width: '100%',
                             }}
                           >
-                            <Edit3 size={13} /> Edit
-                          </Link>
+                            {(role === 'author' || role === 'admin') ? (
+                              <>
+                                <Link
+                                  to={`/project/${project.id}/edit`}
+                                  className="btn btn--secondary"
+                                  style={{
+                                    flex: 1,
+                                    height: '32px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '5px',
+                                    fontSize: '12px',
+                                    fontWeight: 600,
+                                    padding: '0 10px',
+                                    borderRadius: '8px',
+                                    textDecoration: 'none',
+                                    boxSizing: 'border-box',
+                                  }}
+                                >
+                                  <Edit3 size={13} /> Edit
+                                </Link>
 
-                          <Link
-                            to={`/project/${project.id}`}
-                            className="btn btn--ghost btn--sm"
-                            style={{
-                              flex: 1,
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: '0.3rem',
-                              fontSize: 'var(--text-xs)',
-                              padding: '6px 10px',
-                              color: 'var(--color-accent)',
-                              textDecoration: 'none',
-                            }}
-                          >
-                            <Eye size={13} /> View
-                          </Link>
+                                <Link
+                                  to={`/project/${project.id}`}
+                                  className="btn btn--secondary"
+                                  style={{
+                                    flex: 1,
+                                    height: '32px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '5px',
+                                    fontSize: '12px',
+                                    fontWeight: 600,
+                                    padding: '0 10px',
+                                    borderRadius: '8px',
+                                    textDecoration: 'none',
+                                    boxSizing: 'border-box',
+                                  }}
+                                >
+                                  <Eye size={13} /> View
+                                </Link>
 
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteProject(project.id, project.title)}
-                            className="btn btn--ghost btn--sm"
-                            title="Delete Project"
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteProject(project.id, project.title)}
+                                  className="btn btn--secondary"
+                                  title="Delete Project"
+                                  style={{
+                                    width: '34px',
+                                    height: '32px',
+                                    minWidth: '34px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: 0,
+                                    borderRadius: '8px',
+                                    color: 'rgb(220, 38, 38)',
+                                    borderColor: 'rgba(220, 38, 38, 0.25)',
+                                    boxSizing: 'border-box',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <Link
+                                  to={`/project/${project.id}`}
+                                  className="btn btn--secondary"
+                                  style={{
+                                    flex: 1,
+                                    height: '32px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '5px',
+                                    fontSize: '12px',
+                                    fontWeight: 600,
+                                    padding: '0 10px',
+                                    borderRadius: '8px',
+                                    textDecoration: 'none',
+                                    boxSizing: 'border-box',
+                                  }}
+                                >
+                                  <Eye size={13} /> View
+                                </Link>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteProject(project.id, project.title)}
+                                  className="btn btn--secondary"
+                                  title="Delete Project"
+                                  style={{
+                                    width: '34px',
+                                    height: '32px',
+                                    minWidth: '34px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: 0,
+                                    borderRadius: '8px',
+                                    color: 'rgb(220, 38, 38)',
+                                    borderColor: 'rgba(220, 38, 38, 0.25)',
+                                    boxSizing: 'border-box',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          <div
                             style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              padding: '6px 8px',
-                              color: 'rgb(220, 38, 38)',
+                              paddingTop: 'var(--space-3)',
+                              marginTop: 'var(--space-2)',
+                              borderTop: '1px solid var(--color-border)',
+                              width: '100%',
                             }}
                           >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
+                            <Link
+                              to={`/project/${project.id}`}
+                              className="btn btn--secondary"
+                              style={{
+                                width: '100%',
+                                height: '32px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '5px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                borderRadius: '8px',
+                                textDecoration: 'none',
+                                boxSizing: 'border-box',
+                              }}
+                            >
+                              <Eye size={13} /> View Project
+                            </Link>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -935,19 +1359,23 @@ export default function ProfilePage() {
                 >
                   <FolderGit2 size={36} style={{ color: 'var(--color-ink-tertiary)', margin: '0 auto var(--space-3)', opacity: 0.6 }} />
                   <h3 style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--color-ink-primary)', margin: '0 0 var(--space-1) 0' }}>
-                    {projectStatusFilter === 'draft'
+                    {projectTypeFilter !== 'all'
+                      ? `No ${projectTypeFilter === 'Project' ? 'projects' : 'tutorials'} found`
+                      : projectStatusFilter === 'draft'
                       ? 'No drafts found'
                       : projectStatusFilter === 'pending_approval'
                       ? 'No projects currently in review'
                       : projectStatusFilter === 'published'
-                      ? 'No published projects yet'
+                      ? 'No published works yet'
                       : 'No contributions yet'}
                   </h3>
                   <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-secondary)', maxWidth: 420, margin: '0 auto', lineHeight: 1.5 }}>
-                    {projectStatusFilter === 'draft'
+                    {projectTypeFilter !== 'all'
+                      ? `There are no ${projectTypeFilter.toLowerCase()}s under the selected filter criteria.`
+                      : projectStatusFilter === 'draft'
                       ? 'Projects and tutorials saved as drafts will appear here with instant edit and preview access.'
                       : projectStatusFilter === 'pending_approval'
-                      ? 'Projects submitted for administrator verification will appear here.'
+                      ? 'Submissions waiting for administrative verification will appear here.'
                       : 'Hardware projects, technical tutorials, and firmware builds created by this author will appear here.'}
                   </p>
                 </div>
@@ -963,9 +1391,9 @@ export default function ProfilePage() {
               style={{
                 backgroundColor: 'var(--color-surface)',
                 border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-xl)',
-                padding: 'var(--space-8)',
-                boxShadow: 'var(--shadow-sm)',
+                borderRadius: 'var(--radius-lg)',
+                padding: application && application.status === 'approved' ? '0.75rem 1.25rem' : 'var(--space-8)',
+                boxShadow: 'var(--shadow-xs, 0 1px 2px rgba(0,0,0,0.04))',
               }}
             >
               {application && application.status === 'pending' ? (
@@ -1025,56 +1453,69 @@ export default function ProfilePage() {
                   </div>
                 </div>
               ) : application && application.status === 'approved' ? (
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', color: 'rgb(220, 38, 38)', marginBottom: 'var(--space-2)' }}>
-                    <ShieldAlert size={26} style={{ flexShrink: 0 }} />
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: 'var(--space-3)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                    <div
+                      style={{
+                        width: '32px',
+                        height: '32px',
+                        borderRadius: 'var(--radius-md)',
+                        backgroundColor: 'rgba(220, 38, 38, 0.08)',
+                        color: 'rgb(220, 38, 38)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <ShieldAlert size={16} />
+                    </div>
                     <div>
-                      <span style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgb(220, 38, 38)' }}>
-                        Status Notice
-                      </span>
-                      <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0, color: 'var(--color-ink-primary)' }}>
-                        Author Privileges Revoked
-                      </h2>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                        <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-ink-primary)' }}>
+                          Author Privileges Revoked
+                        </span>
+                        <span
+                          style={{
+                            fontSize: '0.6875rem',
+                            fontWeight: 600,
+                            padding: '1px 6px',
+                            borderRadius: '999px',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            color: 'rgb(220, 38, 38)',
+                          }}
+                        >
+                          Demoted
+                        </span>
+                      </div>
+                      <p style={{ color: 'var(--color-ink-muted)', fontSize: 'var(--text-xs)', margin: 0 }}>
+                        Author access revoked by administrator. Contact <strong style={{ color: 'var(--color-ink-primary)' }}>admin@k10hub.io</strong> to appeal.
+                      </p>
                     </div>
                   </div>
 
-                  <p style={{ color: 'var(--color-ink-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.6, marginTop: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-                    You were previously an approved Author on K10 Hub, but your Author access has been demoted by a Platform Administrator. Submitting a new self-application is disabled for demoted accounts.
-                  </p>
-
-                  <div
+                  <a
+                    href={`mailto:admin@k10hub.io?subject=${encodeURIComponent(`Author Role Reinstatement Request - ${displayName}`)}&body=${encodeURIComponent(`Hello Platform Administrator,\n\nI was previously an approved Author on K10 Hub (${displayEmail}), but my author access was demoted. I would like to appeal and request reinstatement of my author privileges.\n\nAccount: ${displayEmail}\nName: ${displayName}\n\nThank you.`)}`}
+                    className="btn btn--secondary btn--sm"
                     style={{
-                      backgroundColor: 'var(--color-paper)',
-                      border: '1px solid rgba(239, 68, 68, 0.25)',
-                      borderRadius: 'var(--radius-lg)',
-                      padding: 'var(--space-5)',
-                      display: 'flex',
+                      display: 'inline-flex',
                       alignItems: 'center',
-                      justifyContent: 'space-between',
-                      flexWrap: 'wrap',
-                      gap: 'var(--space-4)',
+                      gap: '0.35rem',
+                      padding: '0.4rem 0.85rem',
+                      fontSize: 'var(--text-xs)',
+                      textDecoration: 'none',
                     }}
                   >
-                    <div>
-                      <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-tertiary)', marginBottom: '3px' }}>
-                        Contact Platform Administration
-                      </div>
-                      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-primary)', fontWeight: 600 }}>
-                        admin@k10hub.io
-                      </div>
-                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', marginTop: '2px' }}>
-                        If you believe this is an error or wish to appeal and request reinstatement, please write directly to the platform administrator.
-                      </div>
-                    </div>
-
-                    <a
-                      href={`mailto:admin@k10hub.io?subject=${encodeURIComponent(`Author Role Reinstatement Request - ${displayName}`)}&body=${encodeURIComponent(`Hello Platform Administrator,\n\nI was previously an approved Author on K10 Hub (${displayEmail}), but my author access was demoted. I would like to appeal and request reinstatement of my author privileges.\n\nAccount: ${displayEmail}\nName: ${displayName}\n\nThank you.`)}`}
-                      className="btn btn--primary btn--sm"
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none' }}
-                    >
-                      <Mail size={14} /> Email Platform Admin
-                    </a>
-                  </div>
+                    <Mail size={13} /> Email Admin
+                  </a>
                 </div>
               ) : application && application.status === 'rejected' ? (
                 <div>
@@ -1262,33 +1703,115 @@ export default function ProfilePage() {
               
               {/* Display Name */}
               <div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-1)' }}>
-                  <span>Display Name</span>
-                  <span style={{ color: '#ef4444' }}>*</span>
-                </label>
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={(e) => {
-                    setEditName(e.target.value);
-                    if (editFieldErrors.name) setEditFieldErrors({});
-                  }}
-                  placeholder="Your Name or Maker Handle"
-                  style={{
-                    width: '100%',
-                    padding: '10px 12px',
-                    backgroundColor: 'var(--color-paper)',
-                    border: editFieldErrors.name ? '1px solid #ef4444' : '1px solid var(--color-border)',
-                    borderRadius: 'var(--radius-md)',
-                    fontSize: 'var(--text-sm)',
-                    color: 'var(--color-ink-primary)',
-                    outline: 'none',
-                  }}
-                />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-1)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', margin: 0 }}>
+                    <span>Display Name</span>
+                    <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  {isNameLocked && (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '11px',
+                        color: 'var(--color-ink-tertiary)',
+                        backgroundColor: 'var(--color-paper)',
+                        border: '1px solid var(--color-border)',
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-full)',
+                        fontWeight: 600,
+                      }}
+                    >
+                      <Lock size={11} /> Locked
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="text"
+                    value={editName}
+                    disabled={isNameLocked}
+                    readOnly={isNameLocked}
+                    onChange={(e) => {
+                      if (!isNameLocked) {
+                        setEditName(e.target.value);
+                        if (editFieldErrors.name) setEditFieldErrors({});
+                      }
+                    }}
+                    placeholder="Your Name or Maker Handle"
+                    style={{
+                      width: '100%',
+                      padding: isNameLocked ? '10px 12px 10px 34px' : '10px 12px',
+                      backgroundColor: isNameLocked ? 'var(--color-bg)' : 'var(--color-paper)',
+                      border: editFieldErrors.name ? '1px solid #ef4444' : '1px solid var(--color-border)',
+                      borderRadius: 'var(--radius-md)',
+                      fontSize: 'var(--text-sm)',
+                      color: isNameLocked ? 'var(--color-ink-secondary)' : 'var(--color-ink-primary)',
+                      outline: 'none',
+                      cursor: isNameLocked ? 'not-allowed' : 'text',
+                      opacity: isNameLocked ? 0.85 : 1,
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                  {isNameLocked && (
+                    <Lock
+                      size={14}
+                      style={{
+                        position: 'absolute',
+                        left: 12,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        color: 'var(--color-ink-tertiary)',
+                      }}
+                    />
+                  )}
+                </div>
+
                 {editFieldErrors.name && (
                   <p style={{ color: '#ef4444', fontSize: '11px', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 500 }}>
                     ⚠ {editFieldErrors.name}
                   </p>
+                )}
+
+                {/* Warning notice before changing name / Locked status notice */}
+                {!isNameLocked ? (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '8px',
+                      padding: '10px 12px',
+                      backgroundColor: 'rgba(234, 179, 8, 0.08)',
+                      border: '1px solid rgba(234, 179, 8, 0.3)',
+                      borderRadius: 'var(--radius-md)',
+                      marginTop: '8px',
+                    }}
+                  >
+                    <AlertTriangle size={15} style={{ color: '#d97706', flexShrink: 0, marginTop: '2px' }} />
+                    <p style={{ margin: 0, fontSize: '11.5px', color: '#b45309', lineHeight: 1.45 }}>
+                      <strong>Important Notice:</strong> You can only change your Display Name <strong>once in a lifetime</strong>. After saving, this name will be permanently locked across all your projects and cannot be modified again.
+                    </p>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '8px 12px',
+                      backgroundColor: 'rgba(100, 116, 139, 0.07)',
+                      border: '1px solid rgba(100, 116, 139, 0.2)',
+                      borderRadius: 'var(--radius-md)',
+                      marginTop: '8px',
+                    }}
+                  >
+                    <Lock size={13} style={{ color: 'var(--color-ink-tertiary)', flexShrink: 0 }} />
+                    <p style={{ margin: 0, fontSize: '11.5px', color: 'var(--color-ink-tertiary)', lineHeight: 1.4 }}>
+                      Display Name has been permanently set (1-time change limit reached).
+                    </p>
+                  </div>
                 )}
               </div>
 
