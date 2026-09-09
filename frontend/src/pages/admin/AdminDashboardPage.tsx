@@ -1,7 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
 import { api, UserProfile, AuthorApplication, AdminStats, UserRole, UserStatus } from '../../services/api';
+import { ProjectDetail } from '../../config/projectsData';
+import {
+  getAllProjects,
+  approveProject,
+  rejectProject,
+  deleteProject,
+  subscribeProjects,
+} from '../../services/projects/projectStorageService';
+import UserBadge from '../../components/common/UserBadge';
 import {
   Users,
   Shield,
@@ -13,11 +23,27 @@ import {
   ExternalLink,
   RefreshCw,
   Award,
+  FolderGit2,
+  Check,
+  X,
+  Eye,
+  Edit,
+  Trash2,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw,
+  ShieldAlert,
+  Github,
 } from 'lucide-react';
 
 export default function AdminDashboardPage() {
-  const [activeTab, setActiveTab] = useState<'users' | 'applications'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'applications' | 'projects'>('users');
   const [stats, setStats] = useState<AdminStats | null>(null);
+
+  // Projects Verification & Moderation State
+  const [projectsList, setProjectsList] = useState<ProjectDetail[]>(() => getAllProjects());
+  const [projectStatusFilter, setProjectStatusFilter] = useState<'all' | 'pending_approval' | 'published' | 'draft' | 'rejected'>('all');
+  const [projectSearchQuery, setProjectSearchQuery] = useState('');
 
   // Users state
   const [usersList, setUsersList] = useState<UserProfile[]>([]);
@@ -31,8 +57,120 @@ export default function AdminDashboardPage() {
   // Applications state
   const [applications, setApplications] = useState<AuthorApplication[]>([]);
   const [appsLoading, setAppsLoading] = useState(false);
-  const [appStatusFilter, setAppStatusFilter] = useState('all');
+  const [appStatusFilter, setAppStatusFilter] = useState<'pending' | 'approved' | 'demoted' | 'rejected'>('pending');
+  const [expandedAppIds, setExpandedAppIds] = useState<Record<number, boolean>>({});
+  const hasAutoSelectedFilter = useRef(false);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Toggle card expansion
+  const toggleExpandApp = (id: number) => {
+    setExpandedAppIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  // Re-grant Author role to a demoted creator
+  const handleRestoreAuthor = async (userId: number) => {
+    try {
+      await api.admin.updateUserRole(userId, 'author');
+      setActionMessage({ type: 'success', text: `Author role successfully restored.` });
+      loadApplications();
+      loadStats();
+    } catch (err: any) {
+      setActionMessage({ type: 'error', text: err.message || 'Failed to restore Author role' });
+    }
+  };
+
+  // Helper to detect URLs in plain text and render them as interactive clickable links
+  const renderTextWithLinks = (text: string) => {
+    if (!text) return null;
+    const urlRegex = /(https?:\/\/[^\s\)\],]+)/g;
+    const parts = text.split(urlRegex);
+
+    return parts.map((part, i) => {
+      if (urlRegex.test(part)) {
+        return (
+          <a
+            key={i}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              color: 'var(--color-accent)',
+              textDecoration: 'underline',
+              wordBreak: 'break-all',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '3px',
+              fontWeight: 600,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {part} <ExternalLink size={12} style={{ flexShrink: 0 }} />
+          </a>
+        );
+      }
+      return part;
+    });
+  };
+
+  // Formatted render for Hardware Experience with clean badge and showcase link
+  const renderHardwareDetails = (text: string) => {
+    if (!text) return <span style={{ color: 'var(--color-ink-tertiary)', fontSize: '13px' }}>No hardware details provided</span>;
+
+    const urlMatch = text.match(/https?:\/\/[^\s\)\],]+/);
+    const foundUrl = urlMatch ? urlMatch[0] : null;
+
+    const isYes = /worked on unihiker:\s*yes/i.test(text);
+    const isNo = /worked on unihiker:\s*no/i.test(text);
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '12px', color: 'var(--color-ink-secondary)' }}>UNIHIKER Experience:</span>
+          <span
+            style={{
+              fontSize: '11px',
+              fontWeight: 700,
+              padding: '2px 8px',
+              borderRadius: 'var(--radius-full)',
+              backgroundColor: isYes ? 'rgba(34, 197, 94, 0.12)' : isNo ? 'rgba(100, 116, 139, 0.12)' : 'rgba(37, 99, 235, 0.1)',
+              color: isYes ? 'rgb(22, 163, 74)' : isNo ? 'rgb(100, 116, 139)' : 'rgb(37, 99, 235)',
+            }}
+          >
+            {isYes ? 'Experienced' : isNo ? 'New to Platform' : 'Specified'}
+          </span>
+        </div>
+
+        {foundUrl && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+            <span style={{ fontSize: '11px', color: 'var(--color-ink-tertiary)' }}>Showcase:</span>
+            <a
+              href={foundUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                color: 'var(--color-accent)',
+                fontSize: '12px',
+                fontWeight: 600,
+                textDecoration: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {foundUrl.replace(/^https?:\/\/(www\.)?/, '')} <ExternalLink size={11} />
+            </a>
+          </div>
+        )}
+
+        {!isYes && !isNo && (
+          <div style={{ fontSize: '13px', color: 'var(--color-ink-primary)', lineHeight: 1.5 }}>
+            {renderTextWithLinks(text)}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // Rejection modal
   const [rejectModalAppId, setRejectModalAppId] = useState<number | null>(null);
@@ -87,10 +225,22 @@ export default function AdminDashboardPage() {
     loadStats();
   }, [loadStats]);
 
+  // Auto-select Author Applications filter: Pending if there are pending requests, otherwise Approved
+  useEffect(() => {
+    if (!hasAutoSelectedFilter.current && stats !== null) {
+      hasAutoSelectedFilter.current = true;
+      if (stats.pendingApplications > 0) {
+        setAppStatusFilter('pending');
+      } else {
+        setAppStatusFilter('approved');
+      }
+    }
+  }, [stats]);
+
   useEffect(() => {
     if (activeTab === 'users') {
       loadUsers();
-    } else {
+    } else if (activeTab === 'applications') {
       loadApplications();
     }
   }, [activeTab, loadUsers, loadApplications]);
@@ -145,12 +295,47 @@ export default function AdminDashboardPage() {
     }
   };
 
+  // Sync projects from storage
+  useEffect(() => {
+    setProjectsList(getAllProjects());
+    const unsub = subscribeProjects((updated) => {
+      setProjectsList(updated);
+    });
+    return unsub;
+  }, []);
+
+  const handleApproveProject = (id: string, title: string) => {
+    const success = approveProject(id);
+    if (success) {
+      setActionMessage({ type: 'success', text: `Approved "${title}". It is now live in the public catalog.` });
+      setProjectsList(getAllProjects());
+    }
+  };
+
+  const handleRejectProject = (id: string, title: string) => {
+    const success = rejectProject(id);
+    if (success) {
+      setActionMessage({ type: 'success', text: `Rejected "${title}". Status updated to rejected.` });
+      setProjectsList(getAllProjects());
+    }
+  };
+
+  const handleDeleteProject = (id: string, title: string) => {
+    if (window.confirm(`Are you sure you want to permanently remove "${title}"?`)) {
+      const success = deleteProject(id);
+      if (success) {
+        setActionMessage({ type: 'success', text: `Deleted "${title}".` });
+        setProjectsList(getAllProjects());
+      }
+    }
+  };
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--color-paper)' }}>
       <Header />
 
       <main style={{ flex: 1, paddingTop: 'calc(var(--nav-height) + var(--space-8))', paddingBottom: 'var(--space-12)' }}>
-        <div className="container" style={{ maxWidth: 1100 }}>
+        <div className="container">
           {/* Page Title */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
             <div>
@@ -273,14 +458,40 @@ export default function AdminDashboardPage() {
             onClick={() => setActiveTab('applications')}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'rgb(202, 138, 4)' }}>
-                <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase' }}>Pending Applications</span>
+                <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase' }}>Author Requests</span>
                 <Clock size={18} />
               </div>
               <div style={{ fontSize: 'var(--text-3xl)', fontWeight: 700, color: (stats?.pendingApplications || 0) > 0 ? 'rgb(161, 98, 7)' : 'var(--color-ink-primary)', marginTop: 'var(--space-2)' }}>
                 {stats?.pendingApplications ?? '—'}
               </div>
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', marginTop: 'var(--space-1)' }}>
-                Awaiting your approval
+                Awaiting review
+              </div>
+            </div>
+
+            {/* Pending Projects Stat Card */}
+            <div
+              style={{
+                backgroundColor: projectsList.filter(p => p.status === 'pending_approval').length > 0 ? 'rgba(245, 158, 11, 0.08)' : 'var(--color-surface)',
+                border: `1px solid ${projectsList.filter(p => p.status === 'pending_approval').length > 0 ? 'rgba(245, 158, 11, 0.4)' : 'var(--color-border)'}`,
+                borderRadius: 'var(--radius-lg)',
+                padding: 'var(--space-4) var(--space-5)',
+                cursor: 'pointer',
+              }}
+              onClick={() => {
+                setActiveTab('projects');
+                setProjectStatusFilter('pending_approval');
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#d97706' }}>
+                <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase' }}>Pending Projects</span>
+                <FolderGit2 size={18} />
+              </div>
+              <div style={{ fontSize: 'var(--text-3xl)', fontWeight: 700, color: projectsList.filter(p => p.status === 'pending_approval').length > 0 ? '#d97706' : 'var(--color-ink-primary)', marginTop: 'var(--space-2)' }}>
+                {projectsList.filter(p => p.status === 'pending_approval').length}
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', marginTop: 'var(--space-1)' }}>
+                Awaiting verification
               </div>
             </div>
           </div>
@@ -338,6 +549,37 @@ export default function AdminDashboardPage() {
                   fontWeight: 700,
                 }}>
                   {stats?.pendingApplications}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('projects')}
+              style={{
+                padding: 'var(--space-3) var(--space-5)',
+                fontSize: 'var(--text-sm)',
+                fontWeight: 600,
+                color: activeTab === 'projects' ? 'var(--color-ink-primary)' : 'var(--color-ink-tertiary)',
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderBottom: activeTab === 'projects' ? '2px solid var(--color-ink-primary)' : '2px solid transparent',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+              }}
+            >
+              <FolderGit2 size={16} /> Project Verification &amp; Moderation
+              {projectsList.filter(p => p.status === 'pending_approval').length > 0 && (
+                <span style={{
+                  backgroundColor: '#f59e0b',
+                  color: '#000',
+                  borderRadius: 'var(--radius-full)',
+                  padding: '1px 6px',
+                  fontSize: '11px',
+                  fontWeight: 800,
+                }}>
+                  {projectsList.filter(p => p.status === 'pending_approval').length}
                 </span>
               )}
             </button>
@@ -461,7 +703,10 @@ export default function AdminDashboardPage() {
                                 </div>
                               )}
                               <div>
-                                <div style={{ fontWeight: 600, color: 'var(--color-ink-primary)' }}>{u.name}</div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ fontWeight: 600, color: 'var(--color-ink-primary)' }}>{u.name}</span>
+                                  <UserBadge role={u.role} size={15} />
+                                </div>
                                 <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)' }}>{u.email}</div>
                               </div>
                             </div>
@@ -577,16 +822,29 @@ export default function AdminDashboardPage() {
           {/* Tab 2: Author Applications */}
           {activeTab === 'applications' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-              {/* Status Filter */}
+              {/* Status Filter (Pending, Approved, Demoted, Rejected) */}
               <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-                {['all', 'pending', 'approved', 'rejected'].map((st) => (
+                {(['pending', 'approved', 'demoted', 'rejected'] as const).map((st) => (
                   <button
                     key={st}
                     onClick={() => setAppStatusFilter(st)}
                     className={`btn btn--sm ${appStatusFilter === st ? 'btn--primary' : 'btn--secondary'}`}
-                    style={{ textTransform: 'capitalize' }}
+                    style={{ textTransform: 'capitalize', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
                   >
-                    {st}
+                    <span>{st}</span>
+                    {st === 'pending' && stats?.pendingApplications ? (
+                      <span
+                        style={{
+                          backgroundColor: appStatusFilter === 'pending' ? 'rgba(255,255,255,0.25)' : 'var(--color-paper)',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          padding: '1px 6px',
+                          borderRadius: 'var(--radius-full)',
+                        }}
+                      >
+                        {stats.pendingApplications}
+                      </span>
+                    ) : null}
                   </button>
                 ))}
               </div>
@@ -604,121 +862,602 @@ export default function AdminDashboardPage() {
                   textAlign: 'center',
                   color: 'var(--color-ink-secondary)',
                 }}>
-                  No author applications found for status "{appStatusFilter}".
+                  No author applications found under &quot;{appStatusFilter}&quot;.
                 </div>
               ) : (
-                applications.map((app) => (
-                  <div
-                    key={app.id}
-                    style={{
-                      backgroundColor: 'var(--color-surface)',
-                      border: '1px solid var(--color-border)',
-                      borderRadius: 'var(--radius-xl)',
-                      padding: 'var(--space-6)',
-                      boxShadow: 'var(--shadow-sm)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                          <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, margin: 0, color: 'var(--color-ink-primary)' }}>
-                            {app.user?.name || `Applicant #${app.userId}`}
-                          </h3>
-                          <span style={{
-                            fontSize: 'var(--text-xs)',
-                            fontWeight: 700,
-                            padding: '2px 8px',
-                            borderRadius: 'var(--radius-full)',
-                            textTransform: 'uppercase',
-                            backgroundColor:
-                              app.status === 'approved'
-                                ? 'rgba(34, 197, 94, 0.1)'
-                                : app.status === 'rejected'
-                                ? 'rgba(239, 68, 68, 0.1)'
-                                : 'rgba(234, 179, 8, 0.1)',
-                            color:
-                              app.status === 'approved'
-                                ? 'rgb(22, 163, 74)'
-                                : app.status === 'rejected'
-                                ? 'rgb(220, 38, 38)'
-                                : 'rgb(161, 98, 7)',
-                          }}>
-                            {app.status}
-                          </span>
+                applications.map((app) => {
+                  const isExpanded = !!expandedAppIds[app.id];
+                  const isDemoted = app.status === 'approved' && app.user?.role === 'user';
+
+                  return (
+                    <div
+                      key={app.id}
+                      style={{
+                        backgroundColor: 'var(--color-surface)',
+                        border: isDemoted ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid var(--color-border)',
+                        borderRadius: 'var(--radius-xl)',
+                        padding: '18px 22px',
+                        boxShadow: 'var(--shadow-sm)',
+                        transition: 'box-shadow 0.15s ease, border-color 0.15s ease',
+                      }}
+                    >
+                      {/* Card Header Bar */}
+                      <div
+                        onClick={() => toggleExpandApp(app.id)}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: 'var(--space-4)',
+                          cursor: 'pointer',
+                          userSelect: 'none',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                          <div
+                            style={{
+                              width: 42,
+                              height: 42,
+                              borderRadius: '50%',
+                              backgroundColor: isDemoted ? '#b91c1c' : 'var(--color-ink-primary)',
+                              color: '#fff',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontWeight: 700,
+                              fontSize: '16px',
+                              flexShrink: 0,
+                            }}
+                          >
+                            {(app.user?.name || 'M').charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                              <h3 style={{ fontSize: 'var(--text-base)', fontWeight: 700, margin: 0, color: 'var(--color-ink-primary)' }}>
+                                {app.user?.name || `Applicant #${app.userId}`}
+                              </h3>
+                              {isDemoted ? (
+                                <span style={{
+                                  fontSize: '10px',
+                                  fontWeight: 800,
+                                  padding: '2px 8px',
+                                  borderRadius: 'var(--radius-full)',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.05em',
+                                  backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                                  color: 'rgb(220, 38, 38)',
+                                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                                }}>
+                                  Demoted
+                                </span>
+                              ) : (
+                                <span style={{
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  padding: '2px 8px',
+                                  borderRadius: 'var(--radius-full)',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.04em',
+                                  backgroundColor:
+                                    app.status === 'approved'
+                                      ? 'rgba(34, 197, 94, 0.1)'
+                                      : app.status === 'rejected'
+                                      ? 'rgba(239, 68, 68, 0.1)'
+                                      : 'rgba(234, 179, 8, 0.1)',
+                                  color:
+                                    app.status === 'approved'
+                                      ? 'rgb(22, 163, 74)'
+                                      : app.status === 'rejected'
+                                      ? 'rgb(220, 38, 38)'
+                                      : 'rgb(161, 98, 7)',
+                                }}>
+                                  {app.status}
+                                </span>
+                              )}
+                            </div>
+                            <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', margin: '2px 0 0 0' }}>
+                              {app.user?.email}
+                              {isDemoted && <span style={{ color: 'rgb(220, 38, 38)', marginLeft: '6px' }}>• Prior author access revoked</span>}
+                            </p>
+                          </div>
                         </div>
-                        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', margin: 'var(--space-1) 0 0 0' }}>
-                          {app.user?.email}
-                        </p>
+
+                        {/* Actions & Details Toggle */}
+                        <div
+                          style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {app.status === 'pending' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleApproveApp(app.id)}
+                                className="btn btn--primary btn--sm"
+                                style={{ backgroundColor: 'rgb(22, 163, 74)', borderColor: 'rgb(22, 163, 74)', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: 'var(--text-xs)' }}
+                              >
+                                <CheckCircle2 size={14} /> Approve Author
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setRejectModalAppId(app.id)}
+                                className="btn btn--secondary btn--sm"
+                                style={{ color: 'rgb(220, 38, 38)', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: 'var(--text-xs)' }}
+                              >
+                                <XCircle size={14} /> Reject
+                              </button>
+                            </>
+                          )}
+
+                          {isDemoted && app.user && (
+                            <button
+                              type="button"
+                              onClick={() => handleRestoreAuthor(app.user!.id)}
+                              className="btn btn--primary btn--sm"
+                              style={{ backgroundColor: 'rgb(37, 99, 235)', borderColor: 'rgb(37, 99, 235)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: 'var(--text-xs)' }}
+                            >
+                              <RotateCcw size={13} /> Re-grant Author
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => toggleExpandApp(app.id)}
+                            className="btn btn--ghost btn--sm"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: 'var(--text-xs)', padding: '6px 12px', color: 'var(--color-ink-secondary)' }}
+                          >
+                            <span>{isExpanded ? 'Hide' : 'Details'}</span>
+                            {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                          </button>
+                        </div>
                       </div>
 
-                      {/* Application Actions */}
-                      {app.status === 'pending' && (
-                        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-                          <button
-                            type="button"
-                            onClick={() => handleApproveApp(app.id)}
-                            className="btn btn--primary btn--sm"
-                            style={{ backgroundColor: 'rgb(22, 163, 74)', borderColor: 'rgb(22, 163, 74)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
-                          >
-                            <CheckCircle2 size={14} /> Approve & Grant Author
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setRejectModalAppId(app.id)}
-                            className="btn btn--secondary btn--sm"
-                            style={{ color: 'rgb(220, 38, 38)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
-                          >
-                            <XCircle size={14} /> Reject
-                          </button>
+                      {/* Structured Details Card (Expanded) */}
+                      {isExpanded && (
+                        <div
+                          style={{
+                            marginTop: 'var(--space-4)',
+                            backgroundColor: 'var(--color-paper)',
+                            border: '1px solid var(--color-border)',
+                            borderRadius: 'var(--radius-lg)',
+                            padding: 'var(--space-5)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 'var(--space-4)',
+                          }}
+                        >
+                          {/* Row 1: Bio & Hardware Experience (Balanced 2 Columns) */}
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 'var(--space-5)' }}>
+                            <div>
+                              <div style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--color-ink-tertiary)', marginBottom: '6px' }}>
+                                Maker Bio & Overview
+                              </div>
+                              <p style={{ fontSize: '13px', color: 'var(--color-ink-primary)', margin: 0, lineHeight: 1.6 }}>
+                                {app.bio || 'No bio provided.'}
+                              </p>
+                            </div>
+
+                            <div>
+                              <div style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--color-ink-tertiary)', marginBottom: '6px' }}>
+                                Board & Hardware Background
+                              </div>
+                              {renderHardwareDetails(app.hardwareExperience)}
+                            </div>
+                          </div>
+
+                          {/* Row 2: Publishing Agreement & Intent */}
+                          <div style={{ paddingTop: 'var(--space-3)', borderTop: '1px solid var(--color-border)' }}>
+                            <div style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--color-ink-tertiary)', marginBottom: '4px' }}>
+                              Creator Agreement & Intent
+                            </div>
+                            <p style={{ fontSize: '12.5px', color: 'var(--color-ink-secondary)', margin: 0, lineHeight: 1.5 }}>
+                              {app.sampleProjectIdeas || 'Accepted K10 Hub Author Legal Policies and Publishing Code of Conduct.'}
+                            </p>
+                          </div>
+
+                          {/* Row 3: Reference Links */}
+                          {app.githubUrl && (
+                            <div style={{ paddingTop: 'var(--space-3)', borderTop: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--color-ink-tertiary)' }}>
+                                External Profile:
+                              </span>
+                              <a
+                                href={app.githubUrl.startsWith('http') ? app.githubUrl : `https://${app.githubUrl}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.35rem',
+                                  fontSize: '12px',
+                                  color: 'var(--color-accent)',
+                                  textDecoration: 'none',
+                                  fontWeight: 600,
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <Github size={13} />
+                                <span>{app.githubUrl.replace(/^https?:\/\/(www\.)?/, '')}</span>
+                                <ExternalLink size={11} />
+                              </a>
+                            </div>
+                          )}
+
+                          {/* Row 4: Demoted Account Notice */}
+                          {isDemoted && (
+                            <div
+                              style={{
+                                padding: '12px 14px',
+                                backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid rgba(239, 68, 68, 0.25)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 'var(--space-3)',
+                                flexWrap: 'wrap',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <ShieldAlert size={18} color="rgb(220, 38, 38)" style={{ flexShrink: 0 }} />
+                                <div>
+                                  <div style={{ fontWeight: 700, fontSize: '12px', color: 'rgb(220, 38, 38)' }}>
+                                    Author Role Revoked
+                                  </div>
+                                  <div style={{ fontSize: '11px', color: 'var(--color-ink-secondary)' }}>
+                                    This creator was previously approved, but is currently demoted to User.
+                                  </div>
+                                </div>
+                              </div>
+
+                              {app.user && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRestoreAuthor(app.user!.id)}
+                                  className="btn btn--primary btn--sm"
+                                  style={{ fontSize: '11px', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                >
+                                  <RotateCcw size={12} /> Re-grant Author Role
+                                </button>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Row 5: Admin Feedback (if rejected) */}
+                          {app.adminNotes && (
+                            <div style={{ padding: '8px 12px', backgroundColor: 'rgba(239, 68, 68, 0.06)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                              <div style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', color: 'rgb(220, 38, 38)', marginBottom: '2px' }}>
+                                Admin Review Feedback
+                              </div>
+                              <p style={{ fontSize: '12px', color: 'var(--color-ink-primary)', margin: 0 }}>
+                                {app.adminNotes}
+                              </p>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
-
-                    {/* Details */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 'var(--space-4)', backgroundColor: 'var(--color-paper)', padding: 'var(--space-4)', borderRadius: 'var(--radius-lg)' }}>
-                      <div>
-                        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', color: 'var(--color-ink-tertiary)', marginBottom: 'var(--space-1)' }}>
-                          Bio
-                        </div>
-                        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-primary)', margin: 0, lineHeight: 1.5 }}>
-                          {app.bio}
-                        </p>
-                      </div>
-
-                      <div>
-                        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', color: 'var(--color-ink-tertiary)', marginBottom: 'var(--space-1)' }}>
-                          Hardware & Embedded Experience
-                        </div>
-                        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-primary)', margin: 0, lineHeight: 1.5 }}>
-                          {app.hardwareExperience}
-                        </p>
-                      </div>
-
-                      <div style={{ gridColumn: '1 / -1' }}>
-                        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', color: 'var(--color-ink-tertiary)', marginBottom: 'var(--space-1)' }}>
-                          Planned K10 Projects & Hardware Ideas
-                        </div>
-                        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-primary)', margin: 0, lineHeight: 1.5 }}>
-                          {app.sampleProjectIdeas}
-                        </p>
-                      </div>
-
-                      {app.githubUrl && (
-                        <div style={{ gridColumn: '1 / -1' }}>
-                          <a
-                            href={app.githubUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: 'var(--text-xs)', color: 'var(--color-accent)', textDecoration: 'none', fontWeight: 600 }}
-                          >
-                            View Portfolio / GitHub <ExternalLink size={12} />
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
+            </div>
+          )}
+
+          {/* Tab 3: Project Verification & Moderation */}
+          {activeTab === 'projects' && (
+            <div style={{
+              backgroundColor: 'var(--color-surface)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-xl)',
+              padding: 'var(--space-6)',
+              boxShadow: 'var(--shadow-sm)',
+            }}>
+              {/* Header & Subtitle */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-3)', marginBottom: 'var(--space-6)' }}>
+                <div>
+                  <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, margin: '0 0 var(--space-1) 0', color: 'var(--color-ink-primary)' }}>
+                    Project Verification &amp; Moderation Queue
+                  </h2>
+                  <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', margin: 0 }}>
+                    Review projects submitted by authors. Only approved projects are visible on the public platform.
+                  </p>
+                </div>
+
+                <Link
+                  to="/projects/new"
+                  className="btn btn--primary btn--sm"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                >
+                  <FolderGit2 size={14} /> Create Official Project
+                </Link>
+              </div>
+
+              {/* Filters Bar */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)', marginBottom: 'var(--space-6)' }}>
+                {/* Search */}
+                <div style={{ position: 'relative', flex: 1, minWidth: 260 }}>
+                  <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-ink-tertiary)' }} />
+                  <input
+                    type="text"
+                    placeholder="Search by title, author, or tags..."
+                    value={projectSearchQuery}
+                    onChange={(e) => setProjectSearchQuery(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px 8px 36px',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--color-border)',
+                      backgroundColor: 'var(--color-paper)',
+                      fontSize: 'var(--text-sm)',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+
+                {/* Status Filter Buttons */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                  {[
+                    { key: 'all', label: 'All Projects', count: projectsList.length },
+                    { key: 'pending_approval', label: 'Pending Review', count: projectsList.filter(p => p.status === 'pending_approval').length },
+                    { key: 'published', label: 'Published & Live', count: projectsList.filter(p => p.status === 'published' || !p.status).length },
+                    { key: 'draft', label: 'Drafts', count: projectsList.filter(p => p.status === 'draft').length },
+                    { key: 'rejected', label: 'Rejected', count: projectsList.filter(p => p.status === 'rejected').length },
+                  ].map((filterItem) => (
+                    <button
+                      key={filterItem.key}
+                      type="button"
+                      onClick={() => setProjectStatusFilter(filterItem.key as any)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 'var(--radius-full)',
+                        fontSize: 'var(--text-xs)',
+                        fontWeight: 600,
+                        border: projectStatusFilter === filterItem.key ? '1px solid var(--color-accent)' : '1px solid var(--color-border)',
+                        backgroundColor: projectStatusFilter === filterItem.key ? 'var(--color-accent)' : 'var(--color-paper)',
+                        color: projectStatusFilter === filterItem.key ? '#fff' : 'var(--color-ink-secondary)',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <span>{filterItem.label}</span>
+                      <span
+                        style={{
+                          fontSize: '10px',
+                          padding: '1px 5px',
+                          borderRadius: '10px',
+                          backgroundColor: projectStatusFilter === filterItem.key ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.06)',
+                          color: projectStatusFilter === filterItem.key ? '#fff' : 'var(--color-ink-primary)',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {filterItem.count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Projects Table */}
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--color-border)', color: 'var(--color-ink-tertiary)', fontSize: 'var(--text-xs)', textTransform: 'uppercase' }}>
+                      <th style={{ padding: 'var(--space-3)' }}>Project</th>
+                      <th style={{ padding: 'var(--space-3)' }}>Author</th>
+                      <th style={{ padding: 'var(--space-3)' }}>Classification</th>
+                      <th style={{ padding: 'var(--space-3)' }}>Status</th>
+                      <th style={{ padding: 'var(--space-3)' }}>Builds</th>
+                      <th style={{ padding: 'var(--space-3)', textAlign: 'right' }}>Moderation Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projectsList
+                      .filter((p) => {
+                        const matchesFilter =
+                          projectStatusFilter === 'all'
+                            ? true
+                            : projectStatusFilter === 'published'
+                            ? p.status === 'published' || !p.status
+                            : p.status === projectStatusFilter;
+
+                        const q = projectSearchQuery.toLowerCase();
+                        const matchesSearch =
+                          !q ||
+                          p.title.toLowerCase().includes(q) ||
+                          p.author.toLowerCase().includes(q) ||
+                          p.description.toLowerCase().includes(q);
+
+                        return matchesFilter && matchesSearch;
+                      })
+                      .map((p) => (
+                        <tr key={p.id} style={{ borderBottom: '1px solid var(--color-border)' }}>
+                          {/* Project Info with thumbnail */}
+                          <td style={{ padding: 'var(--space-3)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                              <img
+                                src={p.coverImage}
+                                alt={p.title}
+                                style={{ width: 48, height: 36, borderRadius: '6px', objectFit: 'cover', border: '1px solid var(--color-border)' }}
+                              />
+                              <div>
+                                <Link
+                                  to={`/project/${p.id}`}
+                                  style={{ fontWeight: 700, color: 'var(--color-ink-primary)', textDecoration: 'none', fontSize: 'var(--text-sm)' }}
+                                >
+                                  {p.title}
+                                </Link>
+                                <div style={{ fontSize: '11px', color: 'var(--color-ink-tertiary)', fontFamily: 'monospace' }}>
+                                  slug: {p.id}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Author with UserBadge */}
+                          <td style={{ padding: 'var(--space-3)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--color-ink-primary)' }}>
+                                {p.author}
+                              </span>
+                              <UserBadge role={p.authorRole?.toLowerCase().includes('admin') ? 'admin' : 'author'} size={14} />
+                            </div>
+                            <div style={{ fontSize: '10px', color: 'var(--color-ink-tertiary)' }}>
+                              {p.authorRole || 'Hardware Author'}
+                            </div>
+                          </td>
+
+                          {/* Type */}
+                          <td style={{ padding: 'var(--space-3)' }}>
+                            <span
+                              style={{
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                textTransform: 'uppercase',
+                                padding: '2px 8px',
+                                borderRadius: '4px',
+                                backgroundColor: p.type?.toLowerCase() === 'tutorial' ? 'rgba(234, 179, 8, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                color: p.type?.toLowerCase() === 'tutorial' ? '#ca8a04' : '#d97706',
+                              }}
+                            >
+                              {p.type || 'Project'}
+                            </span>
+                          </td>
+
+                          {/* Status */}
+                          <td style={{ padding: 'var(--space-3)' }}>
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                padding: '3px 10px',
+                                borderRadius: 'var(--radius-full)',
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.04em',
+                                backgroundColor:
+                                  p.status === 'published' || !p.status
+                                    ? 'rgba(34, 197, 94, 0.15)'
+                                    : p.status === 'pending_approval'
+                                    ? 'rgba(234, 179, 8, 0.15)'
+                                    : p.status === 'rejected'
+                                    ? 'rgba(239, 68, 68, 0.15)'
+                                    : 'rgba(100, 116, 139, 0.15)',
+                                color:
+                                  p.status === 'published' || !p.status
+                                    ? '#16a34a'
+                                    : p.status === 'pending_approval'
+                                    ? '#ca8a04'
+                                    : p.status === 'rejected'
+                                    ? '#dc2626'
+                                    : '#64748b',
+                                border:
+                                  p.status === 'published' || !p.status
+                                    ? '1px solid rgba(34, 197, 94, 0.3)'
+                                    : p.status === 'pending_approval'
+                                    ? '1px solid rgba(234, 179, 8, 0.3)'
+                                    : p.status === 'rejected'
+                                    ? '1px solid rgba(239, 68, 68, 0.3)'
+                                    : '1px solid rgba(100, 116, 139, 0.3)',
+                              }}
+                            >
+                              {p.status === 'published' || !p.status
+                                ? 'Published'
+                                : p.status === 'pending_approval'
+                                ? 'Pending Review'
+                                : p.status === 'rejected'
+                                ? 'Rejected'
+                                : 'Draft'}
+                            </span>
+                          </td>
+
+                          {/* Firmwares count */}
+                          <td style={{ padding: 'var(--space-3)', fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)' }}>
+                            {p.firmwares?.length || 0} build(s)
+                          </td>
+
+                          {/* Moderation Actions */}
+                          <td style={{ padding: 'var(--space-3)', textAlign: 'right' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px' }}>
+                              {/* 1-Click Approve & Publish */}
+                              {(p.status !== 'published') && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleApproveProject(p.id, p.title)}
+                                  className="btn btn--sm"
+                                  style={{
+                                    backgroundColor: '#16a34a',
+                                    color: '#fff',
+                                    border: 'none',
+                                    padding: '4px 10px',
+                                    fontSize: '11px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                  }}
+                                  title="Approve and make visible on public platform"
+                                >
+                                  <Check size={13} /> Approve
+                                </button>
+                              )}
+
+                              {/* Reject button */}
+                              {p.status === 'pending_approval' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectProject(p.id, p.title)}
+                                  className="btn btn--sm"
+                                  style={{
+                                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                    color: '#dc2626',
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    padding: '4px 10px',
+                                    fontSize: '11px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                  }}
+                                  title="Reject submission"
+                                >
+                                  <X size={13} /> Reject
+                                </button>
+                              )}
+
+                              <Link
+                                to={`/project/${p.id}`}
+                                className="btn btn--secondary btn--sm"
+                                style={{ padding: '4px 8px', fontSize: '11px' }}
+                                title="View Public Page"
+                              >
+                                <Eye size={13} />
+                              </Link>
+
+                              <Link
+                                to={`/project/${p.id}/edit`}
+                                className="btn btn--secondary btn--sm"
+                                style={{ padding: '4px 8px', fontSize: '11px' }}
+                                title="Edit Project Details"
+                              >
+                                <Edit size={13} />
+                              </Link>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteProject(p.id, p.title)}
+                                className="btn btn--ghost btn--sm"
+                                style={{ color: '#dc2626', padding: '4px 6px' }}
+                                title="Delete Project"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

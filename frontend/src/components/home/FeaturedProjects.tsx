@@ -3,63 +3,8 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, Clock } from 'lucide-react';
 import { api, type ProjectSummary } from '../../services/api';
 
-// ─── Static fallback data (shown when API is unavailable) ─────────────────────
-const FALLBACK_PROJECTS: ProjectSummary[] = [
-  {
-    id: 1,
-    slug: 'led-blink',
-    title: 'LED Blink',
-    shortDescription: 'Your first K10 project — blink the onboard RGB LED and learn the basics of the Arduino sketch structure.',
-    difficulty: 'beginner',
-    estimatedMinutes: 10,
-    coverImageUrl: '/images/Hero.png',
-    isFeatured: true,
-    isCommunity: false,
-    isOfficial: true,
-    viewCount: 0,
-    likeCount: 0,
-    flashCount: 0,
-    publishedAt: null,
-    category: { slug: 'fundamentals', name: 'Fundamentals', iconName: 'cpu', color: '#1D4ED8' },
-    author: { slug: 'k10-hub-team', name: 'K10 Hub Team', avatarUrl: null },
-  },
-  {
-    id: 2,
-    slug: 'push-button',
-    title: 'Push Button Interaction',
-    shortDescription: 'Use the K10 physical button to trigger display output and LED feedback.',
-    difficulty: 'beginner',
-    estimatedMinutes: 15,
-    coverImageUrl: '/images/IOs.png',
-    isFeatured: true,
-    isCommunity: false,
-    isOfficial: true,
-    viewCount: 0,
-    likeCount: 0,
-    flashCount: 0,
-    publishedAt: null,
-    category: { slug: 'fundamentals', name: 'Fundamentals', iconName: 'cpu', color: '#1D4ED8' },
-    author: { slug: 'k10-hub-team', name: 'K10 Hub Team', avatarUrl: null },
-  },
-  {
-    id: 3,
-    slug: 'face-detection',
-    title: 'Face Detection',
-    shortDescription: 'Detect human faces in real time using the K10 camera and onboard AI — no cloud, no IDE required.',
-    difficulty: 'advanced',
-    estimatedMinutes: 45,
-    coverImageUrl: '/images/Example.png',
-    isFeatured: true,
-    isCommunity: false,
-    isOfficial: true,
-    viewCount: 0,
-    likeCount: 0,
-    flashCount: 0,
-    publishedAt: null,
-    category: { slug: 'ai-vision', name: 'AI & Vision', iconName: 'eye', color: '#6D28D9' },
-    author: { slug: 'k10-hub-team', name: 'K10 Hub Team', avatarUrl: null },
-  },
-];
+// ─── Static fallback data (clean - no dummy projects) ─────────────────────────
+const FALLBACK_PROJECTS: ProjectSummary[] = [];
 
 function DifficultyBadge({ difficulty }: { difficulty: string }) {
   return (

@@ -88,7 +88,7 @@ export interface ApiItemResponse<T> {
 }
 
 // ─── User & Role types ────────────────────────────────────────────────────────
-export type UserRole = 'user' | 'author' | 'admin';
+export type UserRole = 'unknown' | 'user' | 'author' | 'admin';
 export type UserStatus = 'active' | 'suspended';
 
 export interface UserProfile {
@@ -195,12 +195,22 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
-    applyAuthor: (payload: { bio: string; githubUrl?: string; hardwareExperience: string; sampleProjectIdeas: string }) =>
+    applyAuthor: (payload: {
+      bio: string;
+      githubUrl?: string;
+      hardwareExperience?: string;
+      sampleProjectIdeas?: string;
+      workedOnUnihiker?: boolean;
+      unihikerProjectUrl?: string;
+      acceptedTerms?: boolean;
+    }) =>
       request<{ success: boolean; message: string; application: AuthorApplication }>('/auth/apply-author', {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
     myApplication: () => request<{ application: AuthorApplication | null }>('/auth/my-application'),
+    getPublicProfile: (identifier: string) =>
+      request<{ user: UserProfile }>(`/auth/profile/${encodeURIComponent(identifier)}`),
   },
   admin: {
     getStats: () => request<AdminStats>('/admin/stats'),

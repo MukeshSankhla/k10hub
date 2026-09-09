@@ -15,7 +15,7 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateProfile: (data: Parameters<typeof api.auth.updateProfile>[0]) => Promise<{ success: boolean; message?: string; error?: string }>;
-  applyAuthor: (data: { bio: string; githubUrl?: string; hardwareExperience: string; sampleProjectIdeas: string }) => Promise<{ success: boolean; message?: string; error?: string }>;
+  applyAuthor: (data: Parameters<typeof api.auth.applyAuthor>[0]) => Promise<{ success: boolean; message?: string; error?: string }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -220,7 +220,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Submit author verification application
-  const applyAuthor = async (data: { bio: string; githubUrl?: string; hardwareExperience: string; sampleProjectIdeas: string }) => {
+  const applyAuthor = async (data: Parameters<typeof api.auth.applyAuthor>[0]) => {
     try {
       const res = await api.auth.applyAuthor(data);
       setApplication(res.application);
@@ -231,7 +231,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const role: UserRole = profile?.role || 'user';
+  const role: UserRole = !user ? 'unknown' : (profile?.role || 'user');
 
   return (
     <AuthContext.Provider

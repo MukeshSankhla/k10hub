@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
-import { eq, desc, or, like } from 'drizzle-orm';
+import { eq, desc, or, like, and } from 'drizzle-orm';
 import { db } from '../../config/database';
 import { users, authorApplications, authors } from '../../db/schema';
 import { requireAuth, AuthRequest } from '../../middleware/auth';
@@ -21,10 +21,13 @@ const safeHttpUrl = z.string().trim().max(500).refine((val) => {
 
 // Validation schema for Author Application
 const applyAuthorSchema = z.object({
-  bio: z.string().trim().min(20, 'Please provide a brief bio of at least 20 characters').max(1000, 'Bio cannot exceed 1000 characters'),
+  bio: z.string().trim().min(3, 'Please tell us who you are in at least 3 characters').max(1000, 'Bio cannot exceed 1000 characters'),
   githubUrl: safeHttpUrl.optional().or(z.literal('')),
-  hardwareExperience: z.string().trim().min(20, 'Please describe your embedded/hardware experience in at least 20 characters').max(2000, 'Experience description cannot exceed 2000 characters'),
-  sampleProjectIdeas: z.string().trim().min(20, 'Please describe your planned UNIHIKER K10 projects in at least 20 characters').max(2000, 'Project ideas cannot exceed 2000 characters'),
+  hardwareExperience: z.string().trim().max(2000).optional(),
+  sampleProjectIdeas: z.string().trim().max(2000).optional(),
+  workedOnUnihiker: z.boolean().optional(),
+  unihikerProjectUrl: safeHttpUrl.optional().or(z.literal('')),
+  acceptedTerms: z.boolean().optional(),
 });
 
 // Validation schema for profile update
@@ -243,6 +246,21 @@ router.post('/apply-author', requireAuth, async (req: AuthRequest, res: Response
       });
     }
 
+    // Check if user was previously an approved author and subsequently demoted
+    const previousApproved = await db.query.authorApplications.findFirst({
+      where: and(
+        eq(authorApplications.userId, user.id),
+        eq(authorApplications.status, 'approved')
+      ),
+    });
+
+    if (previousApproved && user.role === 'user') {
+      return res.status(403).json({
+        error: 'AUTHOR_DEMOTED',
+        message: 'You were previously an approved Author, but your access was demoted by a Platform Administrator. Please contact admin@k10hub.io to appeal or restore your author privileges.',
+      });
+    }
+
     // Check if there is already a pending application
     const existingPending = await db.query.authorApplications.findFirst({
       where: eq(authorApplications.userId, user.id),
@@ -257,7 +275,9 @@ router.post('/apply-author', requireAuth, async (req: AuthRequest, res: Response
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const { bio, githubUrl, hardwareExperience, sampleProjectIdeas } = parseResult.data;
+    const { bio, githubUrl, workedOnUnihiker, unihikerProjectUrl } = parseResult.data;
+    const hardwareExp = parseResult.data.hardwareExperience || (workedOnUnihiker ? `Worked on UNIHIKER: Yes (${unihikerProjectUrl || 'Confirmed'})` : 'Worked on UNIHIKER: No (New maker)');
+    const sampleIdeas = parseResult.data.sampleProjectIdeas || 'Accepted K10 Hub Author Legal Policies and Publishing Code of Conduct.';
 
     const [created] = await db
       .insert(authorApplications)
@@ -265,8 +285,8 @@ router.post('/apply-author', requireAuth, async (req: AuthRequest, res: Response
         userId: user.id,
         bio,
         githubUrl: githubUrl || null,
-        hardwareExperience,
-        sampleProjectIdeas,
+        hardwareExperience: hardwareExp,
+        sampleProjectIdeas: sampleIdeas,
         status: 'pending',
         createdAt: now,
         updatedAt: now,
@@ -298,6 +318,77 @@ router.get('/my-application', requireAuth, async (req: AuthRequest, res: Respons
     return res.json({ application: latest || null });
   } catch (error: any) {
     return res.status(500).json({ error: 'QUERY_ERROR', message: error.message });
+  }
+});
+
+/**
+ * GET /api/auth/profile/:identifier
+ * Public profile details
+ */
+router.get('/profile/:identifier', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    const clean = identifier.trim();
+
+    const isNum = !isNaN(Number(clean));
+    const userRecord = await db.query.users.findFirst({
+      where: isNum
+        ? eq(users.id, Number(clean))
+        : or(
+            eq(users.email, clean),
+            like(users.name, `%${clean}%`)
+          ),
+      with: { author: true },
+    });
+
+    if (userRecord) {
+      return res.json({
+        user: {
+          id: userRecord.id,
+          name: userRecord.name,
+          avatarUrl: userRecord.avatarUrl,
+          bio: userRecord.bio || userRecord.author?.bio || null,
+          githubUrl: userRecord.githubUrl || userRecord.author?.githubUrl || null,
+          websiteUrl: userRecord.websiteUrl || userRecord.author?.websiteUrl || null,
+          socialPlatform: userRecord.socialPlatform || userRecord.author?.socialPlatform || null,
+          socialUrl: userRecord.socialUrl || userRecord.author?.socialUrl || null,
+          instagramUrl: userRecord.instagramUrl || userRecord.author?.instagramUrl || null,
+          youtubeUrl: userRecord.youtubeUrl || userRecord.author?.youtubeUrl || null,
+          linkedinUrl: userRecord.linkedinUrl || userRecord.author?.linkedinUrl || null,
+          role: userRecord.role,
+        }
+      });
+    }
+
+    const authorRecord = await db.query.authors.findFirst({
+      where: or(
+        eq(authors.slug, clean.toLowerCase()),
+        like(authors.name, `%${clean}%`)
+      ),
+    });
+
+    if (authorRecord) {
+      return res.json({
+        user: {
+          id: authorRecord.id,
+          name: authorRecord.name,
+          avatarUrl: authorRecord.avatarUrl,
+          bio: authorRecord.bio,
+          githubUrl: authorRecord.githubUrl,
+          websiteUrl: authorRecord.websiteUrl,
+          socialPlatform: authorRecord.socialPlatform,
+          socialUrl: authorRecord.socialUrl,
+          instagramUrl: authorRecord.instagramUrl,
+          youtubeUrl: authorRecord.youtubeUrl,
+          linkedinUrl: authorRecord.linkedinUrl,
+          role: 'author',
+        }
+      });
+    }
+
+    return res.status(404).json({ error: 'USER_NOT_FOUND', message: 'User not found' });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'QUERY_ERROR', message: err.message });
   }
 });
 

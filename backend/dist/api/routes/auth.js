@@ -22,10 +22,13 @@ const safeHttpUrl = zod_1.z.string().trim().max(500).refine((val) => {
 }, { message: 'Must be a valid HTTP or HTTPS URL' });
 // Validation schema for Author Application
 const applyAuthorSchema = zod_1.z.object({
-    bio: zod_1.z.string().trim().min(20, 'Please provide a brief bio of at least 20 characters').max(1000, 'Bio cannot exceed 1000 characters'),
+    bio: zod_1.z.string().trim().min(3, 'Please tell us who you are in at least 3 characters').max(1000, 'Bio cannot exceed 1000 characters'),
     githubUrl: safeHttpUrl.optional().or(zod_1.z.literal('')),
-    hardwareExperience: zod_1.z.string().trim().min(20, 'Please describe your embedded/hardware experience in at least 20 characters').max(2000, 'Experience description cannot exceed 2000 characters'),
-    sampleProjectIdeas: zod_1.z.string().trim().min(20, 'Please describe your planned UNIHIKER K10 projects in at least 20 characters').max(2000, 'Project ideas cannot exceed 2000 characters'),
+    hardwareExperience: zod_1.z.string().trim().max(2000).optional(),
+    sampleProjectIdeas: zod_1.z.string().trim().max(2000).optional(),
+    workedOnUnihiker: zod_1.z.boolean().optional(),
+    unihikerProjectUrl: safeHttpUrl.optional().or(zod_1.z.literal('')),
+    acceptedTerms: zod_1.z.boolean().optional(),
 });
 // Validation schema for profile update
 const updateProfileSchema = zod_1.z.object({
@@ -239,6 +242,16 @@ router.post('/apply-author', auth_1.requireAuth, async (req, res) => {
                 message: parseResult.error.errors[0]?.message || 'Invalid form data',
             });
         }
+        // Check if user was previously an approved author and subsequently demoted
+        const previousApproved = await database_1.db.query.authorApplications.findFirst({
+            where: (0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.authorApplications.userId, user.id), (0, drizzle_orm_1.eq)(schema_1.authorApplications.status, 'approved')),
+        });
+        if (previousApproved && user.role === 'user') {
+            return res.status(403).json({
+                error: 'AUTHOR_DEMOTED',
+                message: 'You were previously an approved Author, but your access was demoted by a Platform Administrator. Please contact admin@k10hub.io to appeal or restore your author privileges.',
+            });
+        }
         // Check if there is already a pending application
         const existingPending = await database_1.db.query.authorApplications.findFirst({
             where: (0, drizzle_orm_1.eq)(schema_1.authorApplications.userId, user.id),
@@ -251,15 +264,17 @@ router.post('/apply-author', auth_1.requireAuth, async (req, res) => {
             });
         }
         const now = Math.floor(Date.now() / 1000);
-        const { bio, githubUrl, hardwareExperience, sampleProjectIdeas } = parseResult.data;
+        const { bio, githubUrl, workedOnUnihiker, unihikerProjectUrl } = parseResult.data;
+        const hardwareExp = parseResult.data.hardwareExperience || (workedOnUnihiker ? `Worked on UNIHIKER: Yes (${unihikerProjectUrl || 'Confirmed'})` : 'Worked on UNIHIKER: No (New maker)');
+        const sampleIdeas = parseResult.data.sampleProjectIdeas || 'Accepted K10 Hub Author Legal Policies and Publishing Code of Conduct.';
         const [created] = await database_1.db
             .insert(schema_1.authorApplications)
             .values({
             userId: user.id,
             bio,
             githubUrl: githubUrl || null,
-            hardwareExperience,
-            sampleProjectIdeas,
+            hardwareExperience: hardwareExp,
+            sampleProjectIdeas: sampleIdeas,
             status: 'pending',
             createdAt: now,
             updatedAt: now,
@@ -290,6 +305,66 @@ router.get('/my-application', auth_1.requireAuth, async (req, res) => {
     }
     catch (error) {
         return res.status(500).json({ error: 'QUERY_ERROR', message: error.message });
+    }
+});
+/**
+ * GET /api/auth/profile/:identifier
+ * Public profile details
+ */
+router.get('/profile/:identifier', async (req, res) => {
+    try {
+        const { identifier } = req.params;
+        const clean = identifier.trim();
+        const isNum = !isNaN(Number(clean));
+        const userRecord = await database_1.db.query.users.findFirst({
+            where: isNum
+                ? (0, drizzle_orm_1.eq)(schema_1.users.id, Number(clean))
+                : (0, drizzle_orm_1.or)((0, drizzle_orm_1.eq)(schema_1.users.email, clean), (0, drizzle_orm_1.like)(schema_1.users.name, `%${clean}%`)),
+            with: { author: true },
+        });
+        if (userRecord) {
+            return res.json({
+                user: {
+                    id: userRecord.id,
+                    name: userRecord.name,
+                    avatarUrl: userRecord.avatarUrl,
+                    bio: userRecord.bio || userRecord.author?.bio || null,
+                    githubUrl: userRecord.githubUrl || userRecord.author?.githubUrl || null,
+                    websiteUrl: userRecord.websiteUrl || userRecord.author?.websiteUrl || null,
+                    socialPlatform: userRecord.socialPlatform || userRecord.author?.socialPlatform || null,
+                    socialUrl: userRecord.socialUrl || userRecord.author?.socialUrl || null,
+                    instagramUrl: userRecord.instagramUrl || userRecord.author?.instagramUrl || null,
+                    youtubeUrl: userRecord.youtubeUrl || userRecord.author?.youtubeUrl || null,
+                    linkedinUrl: userRecord.linkedinUrl || userRecord.author?.linkedinUrl || null,
+                    role: userRecord.role,
+                }
+            });
+        }
+        const authorRecord = await database_1.db.query.authors.findFirst({
+            where: (0, drizzle_orm_1.or)((0, drizzle_orm_1.eq)(schema_1.authors.slug, clean.toLowerCase()), (0, drizzle_orm_1.like)(schema_1.authors.name, `%${clean}%`)),
+        });
+        if (authorRecord) {
+            return res.json({
+                user: {
+                    id: authorRecord.id,
+                    name: authorRecord.name,
+                    avatarUrl: authorRecord.avatarUrl,
+                    bio: authorRecord.bio,
+                    githubUrl: authorRecord.githubUrl,
+                    websiteUrl: authorRecord.websiteUrl,
+                    socialPlatform: authorRecord.socialPlatform,
+                    socialUrl: authorRecord.socialUrl,
+                    instagramUrl: authorRecord.instagramUrl,
+                    youtubeUrl: authorRecord.youtubeUrl,
+                    linkedinUrl: authorRecord.linkedinUrl,
+                    role: 'author',
+                }
+            });
+        }
+        return res.status(404).json({ error: 'USER_NOT_FOUND', message: 'User not found' });
+    }
+    catch (err) {
+        return res.status(500).json({ error: 'QUERY_ERROR', message: err.message });
     }
 });
 exports.default = router;

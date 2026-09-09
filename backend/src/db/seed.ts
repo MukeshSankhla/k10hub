@@ -124,74 +124,8 @@ async function seed() {
     where: (c, { eq }) => eq(c.slug, 'ai-vision'),
   });
 
-  // ─── Projects ───────────────────────────────────────────────────────────────
-  console.log('  Creating projects...');
-  await db.insert(projects).values([
-    {
-      slug: 'led-blink',
-      title: 'LED Blink',
-      shortDescription: 'Your first K10 project — blink the onboard RGB LED and learn the basics of the Arduino sketch structure.',
-      description: `# LED Blink\n\nThe classic first project for any hardware platform. Control the K10 RGB LED.\n\n## What you will learn\n- Arduino sketch structure\n- Digital output control\n- RGB LED color mixing`,
-      categoryId: fundamentalsCat?.id,
-      authorId: teamAuthor?.id,
-      difficulty: 'beginner',
-      estimatedMinutes: 10,
-      isPublished: true,
-      isFeatured: true,
-      isOfficial: true,
-      exampleCode: '#include <K10.h>\n\nvoid setup() {\n  K10.begin();\n}\n\nvoid loop() {\n  K10.setRGB(255, 0, 0);\n  delay(500);\n  K10.setRGB(0, 255, 0);\n  delay(500);\n  K10.setRGB(0, 0, 255);\n  delay(500);\n}',
-      coverImageUrl: '/images/Hero.png',
-      publishedAt: Math.floor(Date.now() / 1000),
-    },
-    {
-      slug: 'push-button',
-      title: 'Push Button Interaction',
-      shortDescription: 'Use the K10 physical button to trigger display output and LED feedback.',
-      description: `# Push Button Interaction\n\nRead the physical button and respond with display and LED feedback.`,
-      categoryId: fundamentalsCat?.id,
-      authorId: teamAuthor?.id,
-      difficulty: 'beginner',
-      estimatedMinutes: 15,
-      isPublished: true,
-      isFeatured: true,
-      isOfficial: true,
-      coverImageUrl: '/images/IOs.png',
-      publishedAt: Math.floor(Date.now() / 1000),
-    },
-    {
-      slug: 'face-detection',
-      title: 'Face Detection',
-      shortDescription: 'Detect human faces in real time using the K10 camera and onboard AI — no cloud, no IDE setup required.',
-      description: `# Face Detection\n\nUse the K10 built-in camera and ESP32-S3 neural acceleration to detect faces in real time.`,
-      categoryId: aiCat?.id,
-      authorId: teamAuthor?.id,
-      difficulty: 'advanced',
-      estimatedMinutes: 45,
-      isPublished: true,
-      isFeatured: true,
-      isOfficial: true,
-      coverImageUrl: '/images/Example.png',
-      publishedAt: Math.floor(Date.now() / 1000),
-    },
-  ]).onConflictDoNothing();
-
-  // ─── Hardware for all projects ───────────────────────────────────────────────
-  const allProjects = await db.query.projects.findMany({
-    where: (p, { eq }) => eq(p.isPublished, true),
-  });
-
-  if (allProjects.length > 0) {
-    console.log('  Adding hardware requirements...');
-    await db.insert(projectHardware).values(
-      allProjects.map((p) => ({
-        projectId: p.id,
-        name: 'UNIHIKER K10',
-        quantity: 1,
-        isRequired: true,
-        purchaseUrl: 'https://www.dfrobot.com/product-2671.html',
-      }))
-    ).onConflictDoNothing();
-  }
+  // ─── Projects (clean - no dummy projects) ───────────────────────────────────
+  console.log('  Skipping dummy projects (clean app)...');
 
   console.log('✅ Database seeded successfully!');
   process.exit(0);

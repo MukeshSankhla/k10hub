@@ -7,6 +7,9 @@ import SignupPage from './pages/auth/SignupPage';
 import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
 import ProfilePage from './pages/auth/ProfilePage';
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
+import ProjectsGalleryPage from './pages/projects/ProjectsGalleryPage';
+import ProjectDetailPage from './pages/projects/ProjectDetailPage';
+import ProjectEditorPage from './pages/projects/ProjectEditorPage';
 
 export default function App() {
   return (
@@ -20,15 +23,10 @@ export default function App() {
           <Route path="/signup" element={<SignupPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
 
-          {/* User Account / Profile & Author Application */}
-          <Route
-            path="/profile"
-            element={
-              <ProtectedRoute>
-                <ProfilePage />
-              </ProtectedRoute>
-            }
-          />
+          {/* User Account / Profile & Public Creator Profiles */}
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/profile/:identifier" element={<ProfilePage />} />
+          <Route path="/user/:identifier" element={<ProfilePage />} />
 
           {/* Admin User Management & Author Verification */}
           <Route
@@ -40,9 +38,19 @@ export default function App() {
             }
           />
 
+          {/* Hardware Projects, Tutorials & Web Flashing */}
+          <Route path="/projects" element={<ProjectsGalleryPage />} />
+          <Route path="/tutorials" element={<ProjectsGalleryPage />} />
+          <Route path="/project/new" element={<ProjectEditorPage />} />
+          <Route path="/projects/new" element={<ProjectEditorPage />} />
+          <Route path="/project/:id/edit" element={<ProjectEditorPage />} />
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+          <Route path="/project/:id" element={<ProjectDetailPage />} />
+          <Route path="/tutorial/:id" element={<ProjectDetailPage />} />
+          <Route path="/tutorials/:id" element={<ProjectDetailPage />} />
+
           {/* Informational Routes */}
           <Route path="/learn" element={<ComingSoon title="Learn" />} />
-          <Route path="/projects" element={<ComingSoon title="Projects" />} />
           <Route path="/community" element={<ComingSoon title="Community" />} />
           <Route path="/about" element={<ComingSoon title="About" />} />
           <Route path="*" element={<ComingSoon title="Page Not Found" />} />

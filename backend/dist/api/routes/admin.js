@@ -250,7 +250,31 @@ router.patch('/users/:id/status', async (req, res) => {
 router.get('/author-applications', async (req, res) => {
     try {
         const statusFilter = req.query.status;
-        const condition = statusFilter && ['pending', 'approved', 'rejected'].includes(statusFilter)
+        if (statusFilter === 'demoted') {
+            const applications = await database_1.db.query.authorApplications.findMany({
+                where: (0, drizzle_orm_1.eq)(schema_1.authorApplications.status, 'approved'),
+                orderBy: [(0, drizzle_orm_1.desc)(schema_1.authorApplications.createdAt)],
+                with: {
+                    user: true,
+                    reviewer: true,
+                },
+            });
+            const demotedApps = applications.filter((a) => a.user && a.user.role === 'user');
+            return res.json({ data: demotedApps });
+        }
+        if (statusFilter === 'approved') {
+            const applications = await database_1.db.query.authorApplications.findMany({
+                where: (0, drizzle_orm_1.eq)(schema_1.authorApplications.status, 'approved'),
+                orderBy: [(0, drizzle_orm_1.desc)(schema_1.authorApplications.createdAt)],
+                with: {
+                    user: true,
+                    reviewer: true,
+                },
+            });
+            const activeApproved = applications.filter((a) => !a.user || a.user.role !== 'user');
+            return res.json({ data: activeApproved });
+        }
+        const condition = statusFilter && ['pending', 'rejected'].includes(statusFilter)
             ? (0, drizzle_orm_1.eq)(schema_1.authorApplications.status, statusFilter)
             : undefined;
         const applications = await database_1.db.query.authorApplications.findMany({

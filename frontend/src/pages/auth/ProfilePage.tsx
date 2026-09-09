@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Link, useSearchParams, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { api } from '../../services/api';
 import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
 import {
-  User,
   Shield,
   Cpu,
   CheckCircle2,
@@ -15,8 +15,6 @@ import {
   ExternalLink,
   Github,
   Award,
-  Layers,
-  FileCode2,
   Edit3,
   Globe,
   Instagram,
@@ -24,17 +22,28 @@ import {
   Linkedin,
   FolderGit2,
   Eye,
-  Heart,
   Zap,
   Plus,
+  BookOpen,
+  Trash2,
+  ShieldAlert,
+  Mail,
+  ArrowLeft,
 } from 'lucide-react';
+import { ProjectDetail } from '../../config/projectsData';
+import {
+  getAllProjects,
+  deleteProject,
+  subscribeProjects,
+  isProjectAuthor,
+} from '../../services/projects/projectStorageService';
+import UserBadge from '../../components/common/UserBadge';
 
 export default function ProfilePage() {
   const {
     user,
     profile,
     application,
-    contributedProjects,
     role,
     signOut,
     applyAuthor,
@@ -42,14 +51,124 @@ export default function ProfilePage() {
     refreshProfile,
   } = useAuth();
 
+  const { identifier } = useParams<{ identifier?: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+
+  const isSelf = Boolean(
+    identifier &&
+    (
+      (profile?.id && String(profile.id).toLowerCase() === identifier.toLowerCase()) ||
+      (user?.id && String(user.id).toLowerCase() === identifier.toLowerCase()) ||
+      (profile?.name && profile.name.toLowerCase() === identifier.toLowerCase()) ||
+      (user?.user_metadata?.name && user.user_metadata.name.toLowerCase() === identifier.toLowerCase()) ||
+      (user?.email && user.email.toLowerCase() === identifier.toLowerCase()) ||
+      (user?.email && user.email.split('@')[0].toLowerCase() === identifier.toLowerCase())
+    )
+  );
+
+  const isOwnProfile = !identifier || isSelf;
+  const [publicUser, setPublicUser] = useState<any>(null);
+
+  useEffect(() => {
+    if (!isOwnProfile && identifier) {
+      api.auth.getPublicProfile(identifier)
+        .then((res) => {
+          if (res && res.user) setPublicUser(res.user);
+        })
+        .catch(() => {});
+    }
+  }, [isOwnProfile, identifier]);
+
+  // Author Project / Tutorial Management State (Filtered to author)
+  const [allProjects, setAllProjects] = useState<ProjectDetail[]>(() => getAllProjects());
+
+  useEffect(() => {
+    setAllProjects(getAllProjects());
+    const unsubscribe = subscribeProjects((updated) => {
+      setAllProjects(updated);
+    });
+    return unsubscribe;
+  }, []);
+
+  // Find projects published by this public author
+  const cleanParamId = (identifier || '').trim().toLowerCase();
+  const publicAuthorProjects = useMemo(() => {
+    if (isOwnProfile) return [];
+    return allProjects.filter((p) => {
+      if (p.status !== 'published' && p.status) return false;
+      const matchId = p.authorId && p.authorId.toLowerCase() === cleanParamId;
+      const matchName = p.author && p.author.toLowerCase() === cleanParamId;
+      const matchEmail = p.authorEmail && p.authorEmail.toLowerCase() === cleanParamId;
+      const matchPrefix = p.authorEmail && p.authorEmail.split('@')[0].toLowerCase() === cleanParamId;
+      return matchId || matchName || matchEmail || matchPrefix;
+    });
+  }, [allProjects, isOwnProfile, cleanParamId]);
+
+  const publicSampleProject = publicAuthorProjects[0];
+
+  const projectsList = isOwnProfile
+    ? allProjects.filter((p) => isProjectAuthor(p, user, profile))
+    : publicAuthorProjects;
+
+  const resolveInitialTab = (): 'published' | 'draft' | 'pending_approval' => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam === 'draft') return 'draft';
+    if (tabParam === 'review' || tabParam === 'pending_approval') return 'pending_approval';
+    if (tabParam === 'published') return 'published';
+    if (location.hash === '#draft' || location.hash === '#drafts') return 'draft';
+    if (location.hash === '#review') return 'pending_approval';
+    return 'published';
+  };
+
+  const [projectStatusFilter, setProjectStatusFilter] = useState<'published' | 'draft' | 'pending_approval'>(resolveInitialTab);
+
+  // Sync tab with URL search parameter or hash
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam === 'draft') {
+      setProjectStatusFilter('draft');
+    } else if (tabParam === 'review' || tabParam === 'pending_approval') {
+      setProjectStatusFilter('pending_approval');
+    } else if (tabParam === 'published') {
+      setProjectStatusFilter('published');
+    } else if (location.hash === '#draft' || location.hash === '#drafts') {
+      setProjectStatusFilter('draft');
+    } else if (location.hash === '#review') {
+      setProjectStatusFilter('pending_approval');
+    }
+  }, [searchParams, location.hash]);
+
+  const handleSelectTab = (tabId: 'published' | 'draft' | 'pending_approval') => {
+    setProjectStatusFilter(tabId);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('tab', tabId === 'pending_approval' ? 'review' : tabId);
+      return next;
+    }, { replace: true });
+  };
+
+  const displayedProjects = projectsList.filter((p) => {
+    if (projectStatusFilter === 'published') return p.status === 'published' || !p.status;
+    return p.status === projectStatusFilter;
+  });
+
+  const handleDeleteProject = (id: string, title: string) => {
+    if (window.confirm(`Are you sure you want to delete "${title}"? This will remove the project and its firmware binaries.`)) {
+      deleteProject(id);
+    }
+  };
+
   // Author Application Modal state
   const [showApplyModal, setShowApplyModal] = useState(false);
-  const [appBio, setAppBio] = useState('');
-  const [appGithubUrl, setAppGithubUrl] = useState('');
-  const [hardwareExperience, setHardwareExperience] = useState('');
-  const [sampleProjectIdeas, setSampleProjectIdeas] = useState('');
+  const [appWhoYouAre, setAppWhoYouAre] = useState('');
+  const [appPortfolioUrl, setAppPortfolioUrl] = useState('');
+  const [workedOnUnihiker, setWorkedOnUnihiker] = useState(false);
+  const [unihikerProjectUrl, setUnihikerProjectUrl] = useState('');
+  const [acceptPolicies, setAcceptPolicies] = useState(false);
   const [appSubmitError, setAppSubmitError] = useState('');
   const [appSubmitting, setAppSubmitting] = useState(false);
+  const [appFieldErrors, setAppFieldErrors] = useState<{ whoYouAre?: string; unihikerUrl?: string; policies?: string }>({});
 
   // Profile Edit Modal state
   const [showEditModal, setShowEditModal] = useState(false);
@@ -66,9 +185,30 @@ export default function ProfilePage() {
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editError, setEditError] = useState('');
   const [editSuccessMsg, setEditSuccessMsg] = useState('');
+  const [editFieldErrors, setEditFieldErrors] = useState<{ name?: string }>({});
 
-  // Pre-populate Edit Modal from active profile
+  // Only initialize defaults on initial load, NEVER overwrite while modal is open or tab is switched
+  const hasInitializedEdit = React.useRef(false);
   useEffect(() => {
+    if (profile && !hasInitializedEdit.current && !showEditModal) {
+      hasInitializedEdit.current = true;
+      setEditName(profile.name || user?.user_metadata?.name || '');
+      setEditAvatarUrl(profile.avatarUrl || user?.user_metadata?.avatar_url || '');
+      setEditBio(profile.bio || profile.author?.bio || '');
+      setEditGithubUrl(profile.githubUrl || profile.author?.githubUrl || '');
+      setEditSocialPlatform(profile.socialPlatform || profile.author?.socialPlatform || 'Instagram');
+      setEditSocialUrl(profile.socialUrl || profile.author?.socialUrl || '');
+      setEditInstagramUrl(profile.instagramUrl || profile.author?.instagramUrl || '');
+      setEditYoutubeUrl(profile.youtubeUrl || profile.author?.youtubeUrl || '');
+      setEditLinkedinUrl(profile.linkedinUrl || profile.author?.linkedinUrl || '');
+      setEditWebsiteUrl(profile.websiteUrl || profile.author?.websiteUrl || '');
+    }
+  }, [profile, user, showEditModal]);
+
+  const handleOpenEditModal = () => {
+    setEditError('');
+    setEditSuccessMsg('');
+    setEditFieldErrors({});
     if (profile) {
       setEditName(profile.name || user?.user_metadata?.name || '');
       setEditAvatarUrl(profile.avatarUrl || user?.user_metadata?.avatar_url || '');
@@ -81,7 +221,18 @@ export default function ProfilePage() {
       setEditLinkedinUrl(profile.linkedinUrl || profile.author?.linkedinUrl || '');
       setEditWebsiteUrl(profile.websiteUrl || profile.author?.websiteUrl || '');
     }
-  }, [profile, user]);
+    setShowEditModal(true);
+  };
+
+  const handleOpenApplyModal = () => {
+    if (application && application.status === 'approved' && role === 'user') {
+      alert('You were previously an approved Author and your role was demoted. Please contact the Platform Administrator at admin@k10hub.io to request reinstatement.');
+      return;
+    }
+    setAppSubmitError('');
+    setAppFieldErrors({});
+    setShowApplyModal(true);
+  };
 
   const handleSignOut = async () => {
     await signOut();
@@ -90,13 +241,41 @@ export default function ProfilePage() {
   const handleApplySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAppSubmitError('');
+    const errors: { whoYouAre?: string; unihikerUrl?: string; policies?: string } = {};
+
+    if (!appWhoYouAre.trim()) {
+      errors.whoYouAre = 'This field is required. Please tell us who you are.';
+    }
+
+    if (workedOnUnihiker && !unihikerProjectUrl.trim()) {
+      errors.unihikerUrl = 'Project or repository URL is required when UNIHIKER board experience is checked.';
+    }
+
+    if (!acceptPolicies) {
+      errors.policies = 'You must read and accept the Author Legal Policies to proceed.';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setAppFieldErrors(errors);
+      setAppSubmitError('Please fill in all required fields marked with * and accept the legal policies.');
+      return;
+    }
+
+    setAppFieldErrors({});
     setAppSubmitting(true);
 
+    const hardwareExp = workedOnUnihiker
+      ? `Worked on UNIHIKER: Yes (${unihikerProjectUrl.trim()})`
+      : 'Worked on UNIHIKER: No (New to UNIHIKER)';
+
     const res = await applyAuthor({
-      bio: appBio,
-      githubUrl: appGithubUrl || undefined,
-      hardwareExperience,
-      sampleProjectIdeas,
+      bio: appWhoYouAre.trim(),
+      githubUrl: appPortfolioUrl.trim() || undefined,
+      hardwareExperience: hardwareExp,
+      sampleProjectIdeas: 'Accepted K10 Hub Author Legal Policies and Publishing Code of Conduct.',
+      workedOnUnihiker,
+      unihikerProjectUrl: unihikerProjectUrl.trim() || undefined,
+      acceptedTerms: acceptPolicies,
     });
 
     setAppSubmitting(false);
@@ -113,6 +292,14 @@ export default function ProfilePage() {
     e.preventDefault();
     setEditError('');
     setEditSuccessMsg('');
+    setEditFieldErrors({});
+
+    if (!editName.trim()) {
+      setEditFieldErrors({ name: 'Display Name is required.' });
+      setEditError('Please fill in the required Display Name.');
+      return;
+    }
+
     setEditSubmitting(true);
 
     const res = await updateProfile({
@@ -141,17 +328,33 @@ export default function ProfilePage() {
     }
   };
 
-  const displayName = profile?.name || user?.user_metadata?.name || user?.email?.split('@')[0] || 'Maker';
-  const displayEmail = profile?.email || user?.email || '';
-  const avatarUrl = profile?.avatarUrl || user?.user_metadata?.avatar_url;
-  const bio = profile?.bio || profile?.author?.bio || '';
-  const githubUrl = profile?.githubUrl || profile?.author?.githubUrl || '';
-  const socialPlatform = profile?.socialPlatform || profile?.author?.socialPlatform || '';
-  const socialUrl = profile?.socialUrl || profile?.author?.socialUrl || '';
-  const instagramUrl = profile?.instagramUrl || profile?.author?.instagramUrl || '';
-  const youtubeUrl = profile?.youtubeUrl || profile?.author?.youtubeUrl || '';
-  const linkedinUrl = profile?.linkedinUrl || profile?.author?.linkedinUrl || '';
-  const websiteUrl = profile?.websiteUrl || profile?.author?.websiteUrl || '';
+  const displayName = isOwnProfile
+    ? (profile?.name || user?.user_metadata?.name || user?.email?.split('@')[0] || 'Maker')
+    : (publicUser?.name || publicSampleProject?.author || decodeURIComponent(identifier || 'Creator'));
+
+  const displayEmail = isOwnProfile ? (profile?.email || user?.email || '') : '';
+  const avatarUrl = isOwnProfile
+    ? (profile?.avatarUrl || user?.user_metadata?.avatar_url)
+    : (publicUser?.avatarUrl || publicSampleProject?.authorAvatar);
+
+  const roleToDisplay = isOwnProfile
+    ? role
+    : (publicUser?.role || publicSampleProject?.authorRole || 'author');
+
+  const bio = isOwnProfile
+    ? (profile?.bio || profile?.author?.bio || '')
+    : (publicUser?.bio || `Hardware developer and creator on UNIHIKER K10 Platform. Published ${publicAuthorProjects.length} build(s).`);
+
+  const githubUrl = isOwnProfile
+    ? (profile?.githubUrl || profile?.author?.githubUrl || '')
+    : (publicUser?.githubUrl || '');
+
+  const socialPlatform = isOwnProfile ? (profile?.socialPlatform || profile?.author?.socialPlatform || '') : (publicUser?.socialPlatform || '');
+  const socialUrl = isOwnProfile ? (profile?.socialUrl || profile?.author?.socialUrl || '') : (publicUser?.socialUrl || '');
+  const instagramUrl = isOwnProfile ? (profile?.instagramUrl || profile?.author?.instagramUrl || '') : (publicUser?.instagramUrl || '');
+  const youtubeUrl = isOwnProfile ? (profile?.youtubeUrl || profile?.author?.youtubeUrl || '') : (publicUser?.youtubeUrl || '');
+  const linkedinUrl = isOwnProfile ? (profile?.linkedinUrl || profile?.author?.linkedinUrl || '') : (publicUser?.linkedinUrl || '');
+  const websiteUrl = isOwnProfile ? (profile?.websiteUrl || profile?.author?.websiteUrl || '') : (publicUser?.websiteUrl || '');
 
   // Consolidate social links list for display
   const socialLinks: { label: string; url: string; icon: React.ReactNode; color: string }[] = [];
@@ -286,95 +489,52 @@ export default function ProfilePage() {
                     <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--color-ink-primary)', margin: 0 }}>
                       {displayName}
                     </h1>
-
-                    {/* Role Tag Badges */}
-                    {role === 'admin' && (
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.3rem',
-                          fontSize: 'var(--text-xs)',
-                          fontWeight: 700,
-                          backgroundColor: 'rgba(239, 68, 68, 0.12)',
-                          color: 'rgb(220, 38, 38)',
-                          padding: '3px 10px',
-                          borderRadius: 'var(--radius-full)',
-                          border: '1px solid rgba(239, 68, 68, 0.25)',
-                        }}
-                      >
-                        <Shield size={13} /> PLATFORM ADMIN
-                      </span>
-                    )}
-                    {role === 'author' && (
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.3rem',
-                          fontSize: 'var(--text-xs)',
-                          fontWeight: 700,
-                          backgroundColor: 'rgba(37, 99, 235, 0.12)',
-                          color: 'rgb(37, 99, 235)',
-                          padding: '3px 10px',
-                          borderRadius: 'var(--radius-full)',
-                          border: '1px solid rgba(37, 99, 235, 0.25)',
-                        }}
-                      >
-                        <Cpu size={13} /> VERIFIED AUTHOR
-                      </span>
-                    )}
-                    {role === 'user' && (
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.3rem',
-                          fontSize: 'var(--text-xs)',
-                          fontWeight: 700,
-                          backgroundColor: 'rgba(22, 163, 74, 0.12)',
-                          color: 'rgb(22, 163, 74)',
-                          padding: '3px 10px',
-                          borderRadius: 'var(--radius-full)',
-                          border: '1px solid rgba(22, 163, 74, 0.25)',
-                        }}
-                      >
-                        <User size={13} /> MAKER
-                      </span>
-                    )}
+                    <UserBadge role={roleToDisplay} size={20} />
                   </div>
 
                   <p style={{ color: 'var(--color-ink-secondary)', fontSize: 'var(--text-sm)', marginTop: 'var(--space-1)', margin: 0 }}>
-                    {displayEmail}
+                    {isOwnProfile ? displayEmail : `${publicAuthorProjects.length} Contributed Build(s)`}
                   </p>
                 </div>
               </div>
 
               {/* Right Column: Actions */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={() => setShowEditModal(true)}
-                  className="btn btn--secondary btn--sm"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-                >
-                  <Edit3 size={14} /> Edit Profile
-                </button>
+                {isOwnProfile ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleOpenEditModal}
+                      className="btn btn--secondary btn--sm"
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                    >
+                      <Edit3 size={14} /> Edit Profile
+                    </button>
 
-                {role === 'admin' && (
-                  <Link to="/admin" className="btn btn--primary btn--sm" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                    <Shield size={14} /> Admin Dashboard
+                    {role === 'admin' && (
+                      <Link to="/admin" className="btn btn--primary btn--sm" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <Shield size={14} /> Admin Dashboard
+                      </Link>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleSignOut}
+                      className="btn btn--ghost btn--sm"
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--color-ink-secondary)' }}
+                    >
+                      <LogOut size={14} /> Sign Out
+                    </button>
+                  </>
+                ) : (
+                  <Link
+                    to="/projects"
+                    className="btn btn--secondary btn--sm"
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none' }}
+                  >
+                    <ArrowLeft size={14} /> Back to Projects
                   </Link>
                 )}
-
-                <button
-                  type="button"
-                  onClick={handleSignOut}
-                  className="btn btn--ghost btn--sm"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--color-ink-secondary)' }}
-                >
-                  <LogOut size={14} /> Sign Out
-                </button>
               </div>
             </div>
 
@@ -440,7 +600,7 @@ export default function ProfilePage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
                   <button
                     type="button"
-                    onClick={() => setShowEditModal(true)}
+                    onClick={handleOpenEditModal}
                     className="btn btn--ghost btn--sm"
                     style={{ fontSize: 'var(--text-xs)', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
                   >
@@ -451,223 +611,354 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          {/* Section: Contributed Projects */}
-          <div
-            style={{
-              backgroundColor: 'var(--color-surface)',
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-xl)',
-              padding: 'var(--space-8)',
-              boxShadow: 'var(--shadow-sm)',
-              marginBottom: 'var(--space-8)',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-5)', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                <FolderGit2 size={20} color="var(--color-accent)" />
-                <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: 'var(--color-ink-primary)', margin: 0 }}>
-                  Contributed Projects
-                </h2>
-                <span
-                  style={{
-                    backgroundColor: 'var(--color-paper)',
-                    border: '1px solid var(--color-border)',
-                    fontSize: 'var(--text-xs)',
-                    fontWeight: 700,
-                    padding: '2px 8px',
-                    borderRadius: 'var(--radius-full)',
-                    color: 'var(--color-ink-secondary)',
-                  }}
-                >
-                  {contributedProjects ? contributedProjects.length : 0}
-                </span>
+          {/* Author: Creator Studio Welcome (Only on own profile) */}
+          {isOwnProfile && (role === 'author' || role === 'admin') && (
+            <div
+              style={{
+                backgroundColor: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-xl)',
+                padding: 'var(--space-8)',
+                boxShadow: 'var(--shadow-sm)',
+                marginBottom: 'var(--space-8)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', color: 'rgb(37, 99, 235)', marginBottom: 'var(--space-1)' }}>
+                    <Cpu size={18} />
+                    <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                      Creator Studio
+                    </span>
+                  </div>
+                  <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: 'var(--color-ink-primary)', margin: 0 }}>
+                    Author Creator Center
+                  </h2>
+                  <p style={{ color: 'var(--color-ink-secondary)', fontSize: 'var(--text-sm)', marginTop: 'var(--space-1)' }}>
+                    You have verified Author access. Share UNIHIKER K10 tutorials, firmware, and open-source schematics.
+                  </p>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                  <Link
+                    to="/project/new?type=Project"
+                    className="btn btn--primary"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none' }}
+                  >
+                    <Plus size={16} /> New Project
+                  </Link>
+                  <Link
+                    to="/project/new?type=Tutorial"
+                    className="btn btn--secondary"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none' }}
+                  >
+                    <BookOpen size={16} /> New Tutorial
+                  </Link>
+                </div>
               </div>
 
-              <Link to="/projects" className="btn btn--ghost btn--sm" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                Browse All Projects <ExternalLink size={13} />
-              </Link>
-            </div>
-
-            {contributedProjects && contributedProjects.length > 0 ? (
               <div
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-                  gap: 'var(--space-4)',
+                  padding: 'var(--space-4)',
+                  backgroundColor: 'var(--color-paper)',
+                  borderRadius: 'var(--radius-lg)',
+                  border: '1px solid var(--color-border)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-3)',
                 }}
               >
-                {contributedProjects.map((project) => (
-                  <div
-                    key={project.id}
+                <CheckCircle2 size={18} color="rgb(34, 197, 94)" />
+                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)' }}>
+                  Your author credentials are fully active. Your verified creator badge is visible across the community.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Section: Contributed Projects (Authors, Admins, or Public Profiles) */}
+          {(isOwnProfile ? (role === 'author' || role === 'admin') : true) && (
+            <div
+              id="contributed-projects"
+              style={{
+                backgroundColor: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-xl)',
+                padding: 'var(--space-8)',
+                boxShadow: 'var(--shadow-sm)',
+                marginBottom: 'var(--space-8)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-5)', flexWrap: 'wrap', gap: 'var(--space-4)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                  <FolderGit2 size={20} color="var(--color-accent)" />
+                  <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: 'var(--color-ink-primary)', margin: 0 }}>
+                    {isOwnProfile ? 'Contributed Projects & Tutorials' : `${displayName}'s Published Builds`}
+                  </h2>
+                  <span
                     style={{
                       backgroundColor: 'var(--color-paper)',
                       border: '1px solid var(--color-border)',
-                      borderRadius: 'var(--radius-lg)',
-                      overflow: 'hidden',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+                      fontSize: 'var(--text-xs)',
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-full)',
+                      color: 'var(--color-ink-secondary)',
                     }}
                   >
-                    {/* Project thumbnail */}
+                    {projectsList.length}
+                  </span>
+                </div>
+
+                {/* Browse Catalog Link */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                  <Link to="/projects" className="btn btn--ghost btn--sm" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: 'var(--text-xs)' }}>
+                    Browse Catalog <ExternalLink size={12} />
+                  </Link>
+                </div>
+              </div>
+
+              {/* Status Filter Tabs (Published, Draft, Review) - Only for own profile */}
+              {isOwnProfile && (
+                <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-6)', flexWrap: 'wrap' }}>
+                  {[
+                    { id: 'published', label: 'Published', count: projectsList.filter(p => p.status === 'published' || !p.status).length },
+                    { id: 'draft', label: 'Draft', count: projectsList.filter(p => p.status === 'draft').length },
+                    { id: 'pending_approval', label: 'Review', count: projectsList.filter(p => p.status === 'pending_approval').length },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => handleSelectTab(tab.id as any)}
+                      className={`btn btn--sm ${projectStatusFilter === tab.id ? 'btn--primary' : 'btn--secondary'}`}
+                      style={{ fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      <span>{tab.label}</span>
+                      <span
+                        style={{
+                          backgroundColor: projectStatusFilter === tab.id ? 'rgba(255,255,255,0.25)' : 'var(--color-paper)',
+                          borderRadius: 'var(--radius-full)',
+                          padding: '1px 6px',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {tab.count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {displayedProjects && displayedProjects.length > 0 ? (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                    gap: 'var(--space-5)',
+                  }}
+                >
+                  {displayedProjects.map((project) => (
                     <div
+                      key={project.id}
                       style={{
-                        height: 140,
-                        backgroundColor: 'var(--color-surface)',
-                        backgroundImage: project.coverImageUrl ? `url(${project.coverImageUrl})` : 'none',
-                        backgroundSize: 'cover',
-                        backgroundPosition: 'center',
-                        position: 'relative',
+                        backgroundColor: 'var(--color-paper)',
+                        border: '1px solid var(--color-border)',
+                        borderRadius: '14px',
+                        overflow: 'hidden',
                         display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
+                        flexDirection: 'column',
                       }}
                     >
-                      {!project.coverImageUrl && (
-                        <Cpu size={36} style={{ color: 'var(--color-ink-tertiary)', opacity: 0.4 }} />
-                      )}
-                      
-                      {project.difficulty && (
+                      {/* Cover Thumbnail */}
+                      <div style={{ height: 140, backgroundColor: '#0f172a', position: 'relative', overflow: 'hidden' }}>
+                        {project.coverImage ? (
+                          <img
+                            src={project.coverImage}
+                            alt={project.title}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          />
+                        ) : (
+                          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-ink-tertiary)' }}>
+                            <Cpu size={36} style={{ opacity: 0.3 }} />
+                          </div>
+                        )}
+                        <span
+                          style={{
+                            position: 'absolute',
+                            top: 10,
+                            left: 10,
+                            backgroundColor: 'rgba(0,0,0,0.7)',
+                            color: '#fff',
+                            fontSize: '10px',
+                            fontWeight: 700,
+                            padding: '3px 8px',
+                            borderRadius: '4px',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.05em',
+                            backdropFilter: 'blur(4px)',
+                          }}
+                        >
+                          {project.type || 'Project'}
+                        </span>
+
+                        {/* Status Badge */}
                         <span
                           style={{
                             position: 'absolute',
                             top: 10,
                             right: 10,
-                            fontSize: '10px',
-                            fontWeight: 700,
+                            fontSize: '9.5px',
+                            fontWeight: 800,
+                            padding: '3px 8px',
+                            borderRadius: '4px',
                             textTransform: 'uppercase',
-                            padding: '2px 8px',
-                            borderRadius: 'var(--radius-full)',
-                            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                            letterSpacing: '0.06em',
+                            backgroundColor:
+                              project.status === 'draft'
+                                ? 'rgba(71, 85, 105, 0.9)'
+                                : project.status === 'pending_approval'
+                                ? 'rgba(202, 138, 4, 0.95)'
+                                : project.status === 'rejected'
+                                ? 'rgba(220, 38, 38, 0.95)'
+                                : 'rgba(22, 163, 74, 0.9)',
                             color: '#fff',
                             backdropFilter: 'blur(4px)',
                           }}
                         >
-                          {project.difficulty}
+                          {project.status === 'pending_approval' ? 'In Review' : (project.status || 'Published')}
                         </span>
-                      )}
+                      </div>
 
-                      {project.category && (
-                        <span
+                      {/* Content */}
+                      <div style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', flex: 1 }}>
+                        <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 var(--space-2) 0', color: 'var(--color-ink-primary)', lineHeight: 1.4 }}>
+                          {project.title}
+                        </h3>
+                        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', margin: '0 0 var(--space-4) 0', lineHeight: 1.5, flex: 1, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                          {project.description}
+                        </p>
+
+                        {/* Stats & Meta row */}
+                        <div
                           style={{
-                            position: 'absolute',
-                            bottom: 10,
-                            left: 10,
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '2px 8px',
-                            borderRadius: 'var(--radius-full)',
-                            backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                            color: project.category.color || '#fff',
-                            backdropFilter: 'blur(4px)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            paddingTop: 'var(--space-2)',
+                            paddingBottom: 'var(--space-3)',
+                            borderTop: '1px solid var(--color-border)',
+                            fontSize: '11px',
+                            color: 'var(--color-ink-tertiary)',
                           }}
                         >
-                          {project.category.name}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Project Body */}
-                    <div style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', flex: 1 }}>
-                      <h3 style={{ fontSize: 'var(--text-base)', fontWeight: 700, color: 'var(--color-ink-primary)', margin: '0 0 var(--space-1) 0' }}>
-                        {project.title}
-                      </h3>
-                      <p
-                        style={{
-                          fontSize: 'var(--text-xs)',
-                          color: 'var(--color-ink-secondary)',
-                          lineHeight: 1.5,
-                          margin: '0 0 var(--space-4) 0',
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical',
-                          overflow: 'hidden',
-                          flex: 1,
-                        }}
-                      >
-                        {project.shortDescription}
-                      </p>
-
-                      {/* Stats footer */}
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          paddingTop: 'var(--space-3)',
-                          borderTop: '1px solid var(--color-border)',
-                          fontSize: 'var(--text-xs)',
-                          color: 'var(--color-ink-tertiary)',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                            <Eye size={12} /> {project.viewCount || 0}
-                          </span>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                            <Heart size={12} /> {project.likeCount || 0}
-                          </span>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                            <Zap size={12} /> {project.flashCount || 0}
+                          <span>{project.publishDate || 'Recent'}</span>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: 'var(--color-accent)', fontWeight: 600 }}>
+                            <Zap size={12} /> {project.flashCount || 0} flashes
                           </span>
                         </div>
 
-                        <Link
-                          to={`/projects`}
+                        {/* Author Management Action Toolbar */}
+                        <div
                           style={{
-                            color: 'var(--color-accent)',
-                            fontWeight: 600,
-                            textDecoration: 'none',
-                            fontSize: 'var(--text-xs)',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '2px',
+                            gap: 'var(--space-2)',
+                            paddingTop: 'var(--space-2)',
+                            borderTop: '1px solid var(--color-border)',
                           }}
                         >
-                          View <ExternalLink size={11} />
-                        </Link>
+                          <Link
+                            to={`/project/${project.id}/edit`}
+                            className="btn btn--secondary btn--sm"
+                            style={{
+                              flex: 1,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '0.3rem',
+                              fontSize: 'var(--text-xs)',
+                              padding: '6px 10px',
+                              textDecoration: 'none',
+                            }}
+                          >
+                            <Edit3 size={13} /> Edit
+                          </Link>
+
+                          <Link
+                            to={`/project/${project.id}`}
+                            className="btn btn--ghost btn--sm"
+                            style={{
+                              flex: 1,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '0.3rem',
+                              fontSize: 'var(--text-xs)',
+                              padding: '6px 10px',
+                              color: 'var(--color-accent)',
+                              textDecoration: 'none',
+                            }}
+                          >
+                            <Eye size={13} /> View
+                          </Link>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteProject(project.id, project.title)}
+                            className="btn btn--ghost btn--sm"
+                            title="Delete Project"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: '6px 8px',
+                              color: 'rgb(220, 38, 38)',
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div
-                style={{
-                  padding: 'var(--space-8) var(--space-4)',
-                  textAlign: 'center',
-                  backgroundColor: 'var(--color-paper)',
-                  borderRadius: 'var(--radius-lg)',
-                  border: '1px dashed var(--color-border)',
-                }}
-              >
-                <Cpu size={32} style={{ color: 'var(--color-ink-tertiary)', margin: '0 auto var(--space-3)' }} />
-                <h3 style={{ fontSize: 'var(--text-base)', fontWeight: 700, color: 'var(--color-ink-primary)', margin: '0 0 var(--space-1) 0' }}>
-                  No Published Projects Yet
-                </h3>
-                <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-secondary)', maxWidth: 440, margin: '0 auto var(--space-4)', lineHeight: 1.5 }}>
-                  {role === 'author' || role === 'admin'
-                    ? 'As a verified platform contributor, projects you publish will automatically appear in your portfolio showcase.'
-                    : 'Apply for the Author Creator Program to build and publish interactive UNIHIKER K10 hardware guides and firmware.'}
-                </p>
-                {role === 'user' && !application && (
-                  <button
-                    type="button"
-                    onClick={() => setShowApplyModal(true)}
-                    className="btn btn--primary btn--sm"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-                  >
-                    <Sparkles size={14} /> Apply for Creator Status
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+                  ))}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    padding: 'var(--space-10) var(--space-4)',
+                    textAlign: 'center',
+                    backgroundColor: 'var(--color-paper)',
+                    borderRadius: 'var(--radius-lg)',
+                    border: '1px dashed var(--color-border)',
+                  }}
+                >
+                  <FolderGit2 size={36} style={{ color: 'var(--color-ink-tertiary)', margin: '0 auto var(--space-3)', opacity: 0.6 }} />
+                  <h3 style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--color-ink-primary)', margin: '0 0 var(--space-1) 0' }}>
+                    {projectStatusFilter === 'draft'
+                      ? 'No drafts found'
+                      : projectStatusFilter === 'pending_approval'
+                      ? 'No projects currently in review'
+                      : projectStatusFilter === 'published'
+                      ? 'No published projects yet'
+                      : 'No contributions yet'}
+                  </h3>
+                  <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-secondary)', maxWidth: 420, margin: '0 auto', lineHeight: 1.5 }}>
+                    {projectStatusFilter === 'draft'
+                      ? 'Projects and tutorials saved as drafts will appear here with instant edit and preview access.'
+                      : projectStatusFilter === 'pending_approval'
+                      ? 'Projects submitted for administrator verification will appear here.'
+                      : 'Hardware projects, technical tutorials, and firmware builds created by this author will appear here.'}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Section: Role Specific Portals */}
 
-          {/* User: Apply to become an Author */}
-          {role === 'user' && (
+          {/* User: Apply to become an Author (Only on own profile) */}
+          {isOwnProfile && role === 'user' && (
             <div
               style={{
                 backgroundColor: 'var(--color-surface)',
@@ -696,22 +987,93 @@ export default function ProfilePage() {
                       border: '1px solid var(--color-border)',
                     }}
                   >
-                    <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', color: 'var(--color-ink-tertiary)', marginBottom: 'var(--space-1)' }}>
-                      Submitted Bio
-                    </div>
-                    <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-primary)', margin: 0 }}>
-                      {application.bio}
-                    </p>
-                    {application.sampleProjectIdeas && (
-                      <>
-                        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', color: 'var(--color-ink-tertiary)', marginTop: 'var(--space-3)', marginBottom: 'var(--space-1)' }}>
-                          Planned K10 Projects
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                      <div>
+                        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', color: 'var(--color-ink-tertiary)', marginBottom: 'var(--space-1)' }}>
+                          Who You Are
                         </div>
                         <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-primary)', margin: 0 }}>
-                          {application.sampleProjectIdeas}
+                          {application.bio}
                         </p>
-                      </>
-                    )}
+                      </div>
+                      {application.hardwareExperience && (
+                        <div>
+                          <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', color: 'var(--color-ink-tertiary)', marginBottom: 'var(--space-1)' }}>
+                            UNIHIKER Experience
+                          </div>
+                          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-primary)', margin: 0 }}>
+                            {application.hardwareExperience}
+                          </p>
+                        </div>
+                      )}
+                      {application.githubUrl && (
+                        <div>
+                          <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', color: 'var(--color-ink-tertiary)', marginBottom: 'var(--space-1)' }}>
+                            GitHub / Portfolio
+                          </div>
+                          <a
+                            href={application.githubUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize: 'var(--text-sm)', color: 'var(--color-accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}
+                          >
+                            {application.githubUrl} <ExternalLink size={12} />
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : application && application.status === 'approved' ? (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', color: 'rgb(220, 38, 38)', marginBottom: 'var(--space-2)' }}>
+                    <ShieldAlert size={26} style={{ flexShrink: 0 }} />
+                    <div>
+                      <span style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgb(220, 38, 38)' }}>
+                        Status Notice
+                      </span>
+                      <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0, color: 'var(--color-ink-primary)' }}>
+                        Author Privileges Revoked
+                      </h2>
+                    </div>
+                  </div>
+
+                  <p style={{ color: 'var(--color-ink-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.6, marginTop: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+                    You were previously an approved Author on K10 Hub, but your Author access has been demoted by a Platform Administrator. Submitting a new self-application is disabled for demoted accounts.
+                  </p>
+
+                  <div
+                    style={{
+                      backgroundColor: 'var(--color-paper)',
+                      border: '1px solid rgba(239, 68, 68, 0.25)',
+                      borderRadius: 'var(--radius-lg)',
+                      padding: 'var(--space-5)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: 'var(--space-4)',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-tertiary)', marginBottom: '3px' }}>
+                        Contact Platform Administration
+                      </div>
+                      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-primary)', fontWeight: 600 }}>
+                        admin@k10hub.io
+                      </div>
+                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', marginTop: '2px' }}>
+                        If you believe this is an error or wish to appeal and request reinstatement, please write directly to the platform administrator.
+                      </div>
+                    </div>
+
+                    <a
+                      href={`mailto:admin@k10hub.io?subject=${encodeURIComponent(`Author Role Reinstatement Request - ${displayName}`)}&body=${encodeURIComponent(`Hello Platform Administrator,\n\nI was previously an approved Author on K10 Hub (${displayEmail}), but my author access was demoted. I would like to appeal and request reinstatement of my author privileges.\n\nAccount: ${displayEmail}\nName: ${displayName}\n\nThank you.`)}`}
+                      className="btn btn--primary btn--sm"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none' }}
+                    >
+                      <Mail size={14} /> Email Platform Admin
+                    </a>
                   </div>
                 </div>
               ) : application && application.status === 'rejected' ? (
@@ -732,7 +1094,7 @@ export default function ProfilePage() {
                   </p>
                   <button
                     type="button"
-                    onClick={() => setShowApplyModal(true)}
+                    onClick={handleOpenApplyModal}
                     className="btn btn--primary btn--sm"
                     style={{ marginTop: 'var(--space-4)' }}
                   >
@@ -740,8 +1102,7 @@ export default function ProfilePage() {
                   </button>
                 </div>
               ) : (
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-4)', margin: 0 }}>
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', color: 'var(--color-accent)', marginBottom: 'var(--space-2)' }}>
                         <Award size={20} />
@@ -759,91 +1120,14 @@ export default function ProfilePage() {
 
                     <button
                       type="button"
-                      onClick={() => setShowApplyModal(true)}
+                      onClick={handleOpenApplyModal}
                       className="btn btn--primary"
                       style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                     >
                       <Sparkles size={16} /> Apply for Author Role
                     </button>
                   </div>
-
-                  {/* Creator perks grid */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
-                    <div style={{ padding: 'var(--space-4)', backgroundColor: 'var(--color-paper)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border)' }}>
-                      <FileCode2 size={20} color="var(--color-accent)" style={{ marginBottom: 'var(--space-2)' }} />
-                      <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, margin: '0 0 var(--space-1) 0' }}>Publish Projects</h3>
-                      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', margin: 0, lineHeight: 1.5 }}>
-                        Create interactive projects with PlatformIO configurations, wiring schematics, and code snippets.
-                      </p>
-                    </div>
-                    <div style={{ padding: 'var(--space-4)', backgroundColor: 'var(--color-paper)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border)' }}>
-                      <Cpu size={20} color="var(--color-accent)" style={{ marginBottom: 'var(--space-2)' }} />
-                      <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, margin: '0 0 var(--space-1) 0' }}>1-Click Firmware</h3>
-                      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', margin: 0, lineHeight: 1.5 }}>
-                        Upload pre-compiled ESP32-S3 binaries that users can flash straight from their web browser.
-                      </p>
-                    </div>
-                    <div style={{ padding: 'var(--space-4)', backgroundColor: 'var(--color-paper)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border)' }}>
-                      <Layers size={20} color="var(--color-accent)" style={{ marginBottom: 'var(--space-2)' }} />
-                      <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, margin: '0 0 var(--space-1) 0' }}>Author Portfolio</h3>
-                      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', margin: 0, lineHeight: 1.5 }}>
-                        Get a dedicated creator badge, public profile, and showcase your hardware designs to the world.
-                      </p>
-                    </div>
-                  </div>
-                </div>
               )}
-            </div>
-          )}
-
-          {/* Author: Creator Studio Welcome */}
-          {role === 'author' && (
-            <div
-              style={{
-                backgroundColor: 'var(--color-surface)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-xl)',
-                padding: 'var(--space-8)',
-                boxShadow: 'var(--shadow-sm)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', color: 'rgb(37, 99, 235)', marginBottom: 'var(--space-1)' }}>
-                    <Cpu size={18} />
-                    <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                      Creator Studio
-                    </span>
-                  </div>
-                  <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: 'var(--color-ink-primary)', margin: 0 }}>
-                    Author Creator Center
-                  </h2>
-                  <p style={{ color: 'var(--color-ink-secondary)', fontSize: 'var(--text-sm)', marginTop: 'var(--space-1)' }}>
-                    You have verified Author access. Share UNIHIKER K10 tutorials, firmware, and open-source schematics.
-                  </p>
-                </div>
-
-                <Link to="/projects" className="btn btn--primary" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  Explore Current Projects <ExternalLink size={14} />
-                </Link>
-              </div>
-
-              <div
-                style={{
-                  padding: 'var(--space-4)',
-                  backgroundColor: 'var(--color-paper)',
-                  borderRadius: 'var(--radius-lg)',
-                  border: '1px solid var(--color-border)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-3)',
-                }}
-              >
-                <CheckCircle2 size={20} color="rgb(34, 197, 94)" />
-                <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-primary)' }}>
-                  Your author credentials are fully active. Your verified creator badge is visible across the community.
-                </span>
-              </div>
             </div>
           )}
 
@@ -978,26 +1262,34 @@ export default function ProfilePage() {
               
               {/* Display Name */}
               <div>
-                <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-1)' }}>
-                  Display Name
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-1)' }}>
+                  <span>Display Name</span>
+                  <span style={{ color: '#ef4444' }}>*</span>
                 </label>
                 <input
                   type="text"
                   value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
+                  onChange={(e) => {
+                    setEditName(e.target.value);
+                    if (editFieldErrors.name) setEditFieldErrors({});
+                  }}
                   placeholder="Your Name or Maker Handle"
-                  required
                   style={{
                     width: '100%',
                     padding: '10px 12px',
                     backgroundColor: 'var(--color-paper)',
-                    border: '1px solid var(--color-border)',
+                    border: editFieldErrors.name ? '1px solid #ef4444' : '1px solid var(--color-border)',
                     borderRadius: 'var(--radius-md)',
                     fontSize: 'var(--text-sm)',
                     color: 'var(--color-ink-primary)',
                     outline: 'none',
                   }}
                 />
+                {editFieldErrors.name && (
+                  <p style={{ color: '#ef4444', fontSize: '11px', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 500 }}>
+                    ⚠ {editFieldErrors.name}
+                  </p>
+                )}
               </div>
 
               {/* Avatar URL */}
@@ -1270,21 +1562,27 @@ export default function ProfilePage() {
             )}
 
             <form onSubmit={handleApplySubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+              {/* Field 1: Who you are */}
               <div>
-                <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-1)' }}>
-                  Creator Bio *
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-1)' }}>
+                  <span>Who You Are</span>
+                  <span style={{ color: '#ef4444' }}>*</span>
                 </label>
                 <textarea
-                  required
-                  rows={3}
-                  value={appBio}
-                  onChange={(e) => setAppBio(e.target.value)}
-                  placeholder="e.g. IoT hardware engineer specializing in ESP32, environmental monitoring, and edge ML..."
+                  rows={2}
+                  value={appWhoYouAre}
+                  onChange={(e) => {
+                    setAppWhoYouAre(e.target.value);
+                    if (appFieldErrors.whoYouAre) {
+                      setAppFieldErrors((prev) => ({ ...prev, whoYouAre: undefined }));
+                    }
+                  }}
+                  placeholder="Tell us briefly about yourself, maker background, or expertise..."
                   style={{
                     width: '100%',
                     padding: '10px 12px',
                     backgroundColor: 'var(--color-paper)',
-                    border: '1px solid var(--color-border)',
+                    border: appFieldErrors.whoYouAre ? '1px solid #ef4444' : '1px solid var(--color-border)',
                     borderRadius: 'var(--radius-md)',
                     fontSize: 'var(--text-sm)',
                     color: 'var(--color-ink-primary)',
@@ -1292,19 +1590,25 @@ export default function ProfilePage() {
                     resize: 'vertical',
                   }}
                 />
+                {appFieldErrors.whoYouAre && (
+                  <p style={{ color: '#ef4444', fontSize: '11px', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 500 }}>
+                    ⚠ {appFieldErrors.whoYouAre}
+                  </p>
+                )}
               </div>
 
+              {/* Field 2: GitHub or project portfolio URL */}
               <div>
                 <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-1)' }}>
-                  GitHub or Portfolio URL
+                  GitHub or Project Portfolio URL
                 </label>
                 <div style={{ position: 'relative' }}>
                   <Github size={18} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-ink-tertiary)' }} />
                   <input
                     type="url"
-                    placeholder="https://github.com/yourhandle"
-                    value={appGithubUrl}
-                    onChange={(e) => setAppGithubUrl(e.target.value)}
+                    placeholder="https://github.com/yourhandle or website"
+                    value={appPortfolioUrl}
+                    onChange={(e) => setAppPortfolioUrl(e.target.value)}
                     style={{
                       width: '100%',
                       padding: '10px 12px 10px 38px',
@@ -1319,54 +1623,130 @@ export default function ProfilePage() {
                 </div>
               </div>
 
+              {/* Field 3: Have you worked on UNIHIKER projects? (Checkbox) */}
               <div>
-                <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-1)' }}>
-                  Embedded & Hardware Experience *
-                </label>
-                <textarea
-                  required
-                  rows={3}
-                  value={hardwareExperience}
-                  onChange={(e) => setHardwareExperience(e.target.value)}
-                  placeholder="e.g. 4+ years of Arduino/ESP-IDF, I2C/SPI sensors, PlatformIO development, UNIHIKER K10 RGB and screen programming..."
+                <label
                   style={{
-                    width: '100%',
-                    padding: '10px 12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    cursor: 'pointer',
                     backgroundColor: 'var(--color-paper)',
                     border: '1px solid var(--color-border)',
                     borderRadius: 'var(--radius-md)',
-                    fontSize: 'var(--text-sm)',
-                    color: 'var(--color-ink-primary)',
-                    outline: 'none',
-                    resize: 'vertical',
+                    padding: '10px 14px',
                   }}
-                />
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-1)' }}>
-                  Planned UNIHIKER K10 Projects & Code *
+                >
+                  <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-primary)', fontWeight: 600 }}>
+                    Did you work with UNIHIKER board?
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={workedOnUnihiker}
+                    onChange={(e) => {
+                      setWorkedOnUnihiker(e.target.checked);
+                      if (!e.target.checked) {
+                        setUnihikerProjectUrl('');
+                        setAppFieldErrors((prev) => ({ ...prev, unihikerUrl: undefined }));
+                      }
+                    }}
+                    style={{ cursor: 'pointer', accentColor: 'var(--color-accent)', width: 18, height: 18 }}
+                  />
                 </label>
-                <textarea
-                  required
-                  rows={3}
-                  value={sampleProjectIdeas}
-                  onChange={(e) => setSampleProjectIdeas(e.target.value)}
-                  placeholder="e.g. A smart desk weather station using the onboard sensors and screen, with 1-click web flashing..."
-                  style={{
-                    width: '100%',
-                    padding: '10px 12px',
-                    backgroundColor: 'var(--color-paper)',
-                    border: '1px solid var(--color-border)',
-                    borderRadius: 'var(--radius-md)',
-                    fontSize: 'var(--text-sm)',
-                    color: 'var(--color-ink-primary)',
-                    outline: 'none',
-                    resize: 'vertical',
-                  }}
-                />
               </div>
 
+              {/* Field 4: If yes ask for URL */}
+              {workedOnUnihiker && (
+                <div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-1)' }}>
+                    <span>UNIHIKER Project or Repository URL</span>
+                    <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://github.com/username/unihiker-project"
+                    value={unihikerProjectUrl}
+                    onChange={(e) => {
+                      setUnihikerProjectUrl(e.target.value);
+                      if (appFieldErrors.unihikerUrl) {
+                        setAppFieldErrors((prev) => ({ ...prev, unihikerUrl: undefined }));
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      backgroundColor: 'var(--color-paper)',
+                      border: appFieldErrors.unihikerUrl ? '1px solid #ef4444' : '1px solid var(--color-border)',
+                      borderRadius: 'var(--radius-md)',
+                      fontSize: 'var(--text-sm)',
+                      color: 'var(--color-ink-primary)',
+                      outline: 'none',
+                    }}
+                  />
+                  {appFieldErrors.unihikerUrl ? (
+                    <p style={{ color: '#ef4444', fontSize: '11px', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 500 }}>
+                      ⚠ {appFieldErrors.unihikerUrl}
+                    </p>
+                  ) : (
+                    <span style={{ display: 'block', fontSize: '11px', color: 'var(--color-ink-tertiary)', marginTop: '4px' }}>
+                      Provide a link to your code repository, demo video, or project documentation.
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Field 5: Author Legal Policies (Always expanded, checkbox below) */}
+              <div
+                style={{
+                  backgroundColor: 'var(--color-paper)',
+                  border: appFieldErrors.policies ? '1px solid #ef4444' : '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-lg)',
+                  padding: 'var(--space-4)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 'var(--space-3)',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-primary)', marginBottom: 'var(--space-2)' }}>
+                    Author Guidelines & Legal Policies
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '11.5px', color: 'var(--color-ink-secondary)', lineHeight: 1.6 }}>
+                    <li><strong>Content Ownership:</strong> You retain ownership of your original guides and firmware. You grant K10 Hub a non-exclusive license to host and distribute them.</li>
+                    <li><strong>Firmware Safety:</strong> Binaries must be safe, free of malicious code, and intended for UNIHIKER K10 / ESP32-S3 boards.</li>
+                    <li><strong>Attribution:</strong> Open-source libraries and code snippets must respect their respective licenses (MIT, Apache, GPL).</li>
+                    <li><strong>Community Standards:</strong> Content must be respectful, educational, and suitable for the global maker community.</li>
+                  </ul>
+                </div>
+
+                <div style={{ paddingTop: 'var(--space-3)', borderTop: '1px solid var(--color-border)', display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)' }}>
+                  <input
+                    id="author-legal-terms"
+                    type="checkbox"
+                    checked={acceptPolicies}
+                    onChange={(e) => {
+                      setAcceptPolicies(e.target.checked);
+                      if (appFieldErrors.policies) {
+                        setAppFieldErrors((prev) => ({ ...prev, policies: undefined }));
+                      }
+                    }}
+                    style={{ marginTop: '2px', cursor: 'pointer', accentColor: 'var(--color-accent)', width: 16, height: 16 }}
+                  />
+                  <label
+                    htmlFor="author-legal-terms"
+                    style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-primary)', cursor: 'pointer', lineHeight: 1.5, fontWeight: 500 }}
+                  >
+                    I have read and accept the <strong>K10 Hub Author Legal Policies</strong> and Publishing Code of Conduct. <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                </div>
+                {appFieldErrors.policies && (
+                  <p style={{ color: '#ef4444', fontSize: '11px', margin: 0, display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 500 }}>
+                    ⚠ {appFieldErrors.policies}
+                  </p>
+                )}
+              </div>
+
+              {/* Actions */}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)', marginTop: 'var(--space-2)' }}>
                 <button
                   type="button"

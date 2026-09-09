@@ -292,8 +292,35 @@ router.patch('/users/:id/status', async (req: AuthRequest, res: Response) => {
 router.get('/author-applications', async (req: AuthRequest, res: Response) => {
   try {
     const statusFilter = req.query.status as string;
+
+    if (statusFilter === 'demoted') {
+      const applications = await db.query.authorApplications.findMany({
+        where: eq(authorApplications.status, 'approved'),
+        orderBy: [desc(authorApplications.createdAt)],
+        with: {
+          user: true,
+          reviewer: true,
+        },
+      });
+      const demotedApps = applications.filter((a) => a.user && a.user.role === 'user');
+      return res.json({ data: demotedApps });
+    }
+
+    if (statusFilter === 'approved') {
+      const applications = await db.query.authorApplications.findMany({
+        where: eq(authorApplications.status, 'approved'),
+        orderBy: [desc(authorApplications.createdAt)],
+        with: {
+          user: true,
+          reviewer: true,
+        },
+      });
+      const activeApproved = applications.filter((a) => !a.user || a.user.role !== 'user');
+      return res.json({ data: activeApproved });
+    }
+
     const condition =
-      statusFilter && ['pending', 'approved', 'rejected'].includes(statusFilter)
+      statusFilter && ['pending', 'rejected'].includes(statusFilter)
         ? eq(authorApplications.status, statusFilter as any)
         : undefined;
 
