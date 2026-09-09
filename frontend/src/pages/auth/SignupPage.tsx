@@ -95,17 +95,14 @@ export default function SignupPage() {
               <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--color-ink-primary)', letterSpacing: '-0.02em', margin: 0 }}>
                 Join K10 Hub
               </h1>
-              <p style={{ color: 'var(--color-ink-secondary)', fontSize: 'var(--text-sm)', marginTop: 'var(--space-1)' }}>
-                Create your maker account to explore, build, and publish for UNIHIKER K10.
-              </p>
             </div>
 
             {/* Error banner */}
             {errorMessage && (
               <div style={{
                 display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
+                alignItems: 'flex-start',
+                gap: '0.6rem',
                 backgroundColor: 'rgba(239, 68, 68, 0.1)',
                 border: '1px solid rgba(239, 68, 68, 0.3)',
                 color: 'rgb(220, 38, 38)',
@@ -114,8 +111,25 @@ export default function SignupPage() {
                 fontSize: 'var(--text-sm)',
                 marginBottom: 'var(--space-4)',
               }}>
-                <AlertCircle size={18} style={{ flexShrink: 0 }} />
-                <span>{errorMessage}</span>
+                <AlertCircle size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <span>{errorMessage}</span>
+                  {(errorMessage.toLowerCase().includes('already') ||
+                    errorMessage.toLowerCase().includes('rate limit') ||
+                    errorMessage.toLowerCase().includes('sign in')) && (
+                    <Link
+                      to="/login"
+                      style={{
+                        color: 'rgb(185, 28, 28)',
+                        fontWeight: 700,
+                        textDecoration: 'underline',
+                        fontSize: 'var(--text-xs)',
+                      }}
+                    >
+                      Click here to sign in with your password &rarr;
+                    </Link>
+                  )}
+                </div>
               </div>
             )}
 
@@ -242,17 +256,6 @@ export default function SignupPage() {
                     }}
                   />
                 </div>
-              </div>
-
-              <div style={{
-                padding: 'var(--space-3)',
-                backgroundColor: 'var(--color-paper)',
-                borderRadius: 'var(--radius-md)',
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-ink-secondary)',
-                lineHeight: 1.5,
-              }}>
-                💡 <strong>Creator tip:</strong> New accounts start with the <strong>User</strong> role. You can apply to become a verified <strong>Author</strong> anytime from your Profile page to publish hardware projects!
               </div>
 
               <button

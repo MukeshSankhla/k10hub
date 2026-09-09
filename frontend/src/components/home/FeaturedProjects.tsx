@@ -1,272 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Zap, Calendar, Star, BookOpen, FolderGit2, Plus } from 'lucide-react';
-import { useAuth } from '../../contexts/AuthContext';
+import { ArrowRight, Star, BookOpen, FolderGit2, Plus } from 'lucide-react';
 import { ProjectDetail } from '../../config/projectsData';
 import {
   getPublicProjects,
   subscribeProjects,
-  resolveProjectAuthor,
 } from '../../services/projects/projectStorageService';
-import { getLocalFlashCount } from '../../services/flasher/flashCountService';
-import UserBadge from '../common/UserBadge';
-
-function getLevelLabel(level: number | string | undefined): string {
-  const num = Number(level);
-  switch (num) {
-    case 1:
-      return 'Beginner';
-    case 2:
-      return 'Intermediate';
-    case 3:
-      return 'Advance';
-    case 4:
-      return 'Expert';
-    default:
-      return typeof level === 'string' && level ? level : 'Beginner';
-  }
-}
-
-function FeaturedCard({ project }: { project: ProjectDetail }) {
-  const { user, profile } = useAuth();
-  const authorInfo = resolveProjectAuthor(project, user, profile);
-  const authorProfileUrl = authorInfo.isCurrentUser
-    ? '/profile'
-    : `/profile/${encodeURIComponent(authorInfo.authorId || authorInfo.name)}`;
-  const isTutorial = project.type?.toLowerCase() === 'tutorial';
-  const flashes = Math.max(project.flashCount || 0, getLocalFlashCount(project.id));
-  const isFeatured = Boolean(project.featured || project.isFeatured);
-
-  return (
-    <Link
-      to={`/project/${project.id}`}
-      className="project-card"
-      aria-label={`${project.title} — ${project.type || 'Project'}`}
-      style={{ height: '100%' }}
-    >
-      {/* Cover Image with Badges */}
-      <div className="project-card__image" style={{ position: 'relative' }}>
-        {project.coverImage ? (
-          <img
-            src={project.coverImage}
-            alt={`${project.title} preview`}
-            loading="lazy"
-          />
-        ) : (
-          <div
-            style={{
-              width: '100%',
-              height: '100%',
-              backgroundColor: 'var(--color-paper-warm)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <span className="label">UNIHIKER K10</span>
-          </div>
-        )}
-
-        {/* Level Tag (Top-Left) */}
-        <div
-          style={{
-            position: 'absolute',
-            top: 10,
-            left: 10,
-            backgroundColor: 'rgba(0, 0, 0, 0.72)',
-            backdropFilter: 'blur(4px)',
-            color: '#fff',
-            fontSize: '9.5px',
-            fontWeight: 700,
-            padding: '2px 7px',
-            borderRadius: '4px',
-            textTransform: 'uppercase',
-            letterSpacing: '0.04em',
-            zIndex: 2,
-          }}
-        >
-          {getLevelLabel(project.level)}
-        </div>
-
-        {/* Featured Pill (Bottom-Left) */}
-        {isFeatured && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 10,
-              left: 10,
-              backgroundColor: 'rgba(245, 158, 11, 0.95)',
-              backdropFilter: 'blur(4px)',
-              color: '#fff',
-              fontSize: '9.5px',
-              fontWeight: 700,
-              padding: '2px 7px',
-              borderRadius: '4px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '3px',
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
-              zIndex: 2,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
-            }}
-          >
-            <Star size={10} fill="#fff" /> Featured
-          </div>
-        )}
-
-        {/* Type Ribbon (Top-Right) */}
-        <div
-          style={{
-            position: 'absolute',
-            top: 10,
-            right: 10,
-            backgroundColor: isTutorial ? 'rgba(202, 138, 4, 0.92)' : 'rgba(29, 78, 216, 0.92)',
-            backdropFilter: 'blur(4px)',
-            color: '#ffffff',
-            fontSize: '9.5px',
-            fontWeight: 700,
-            letterSpacing: '0.05em',
-            textTransform: 'uppercase',
-            padding: '2px 7px',
-            borderRadius: '4px',
-            zIndex: 2,
-          }}
-        >
-          {project.type || 'Project'}
-        </div>
-      </div>
-
-      {/* Body */}
-      <div className="project-card__body">
-        <h3 className="project-card__title" style={{ margin: 0, fontSize: 'var(--text-base)', fontWeight: 700 }}>
-          {project.title}
-        </h3>
-        <p
-          className="project-card__description"
-          style={{
-            margin: 0,
-            fontSize: 'var(--text-xs)',
-            lineHeight: 1.5,
-            color: 'var(--color-ink-secondary)',
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden',
-          }}
-        >
-          {project.description}
-        </p>
-
-        {/* Footer */}
-        <div
-          className="project-card__footer"
-          style={{
-            marginTop: 'auto',
-            paddingTop: 'var(--space-3)',
-            borderTop: '1px solid var(--color-border)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          {/* Author */}
-          <Link
-            to={authorProfileUrl}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              textDecoration: 'none',
-              color: 'inherit',
-            }}
-            title={authorInfo.isCurrentUser ? 'View your profile' : `View ${authorInfo.name}'s profile`}
-          >
-            {authorInfo.avatarUrl ? (
-              <img
-                src={authorInfo.avatarUrl}
-                alt={authorInfo.name}
-                style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'cover' }}
-              />
-            ) : (
-              <div
-                style={{
-                  width: 20,
-                  height: 20,
-                  borderRadius: '50%',
-                  backgroundColor: 'var(--color-ink-primary)',
-                  color: 'var(--color-paper)',
-                  fontSize: '9px',
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                {authorInfo.name.charAt(0)}
-              </div>
-            )}
-            <span
-              style={{
-                fontSize: '11px',
-                fontWeight: 600,
-                color: 'var(--color-ink-primary)',
-                maxWidth: 95,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {authorInfo.name}
-            </span>
-            <UserBadge
-              role={
-                authorInfo.role?.toLowerCase().includes('admin')
-                  ? 'admin'
-                  : authorInfo.role?.toLowerCase().includes('author') || authorInfo.isCurrentUser
-                  ? 'author'
-                  : 'user'
-              }
-              size={12}
-            />
-          </Link>
-
-          {/* Stats: Flash Count & Date */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '3px',
-                fontSize: '11px',
-                fontWeight: 600,
-                color: 'var(--color-accent)',
-              }}
-              title={`${flashes} hardware flashes`}
-            >
-              <Zap size={11} fill="currentColor" />
-              <span>{flashes}</span>
-            </span>
-
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                fontSize: '11px',
-                fontWeight: 500,
-                color: 'var(--color-ink-tertiary)',
-              }}
-            >
-              <Calendar size={11} />
-              <span>{project.publishDate || 'Recent'}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Link>
-  );
-}
+import ProjectCard from '../projects/ProjectCard';
 
 export default function FeaturedProjects() {
   const [projects, setProjects] = useState<ProjectDetail[]>(() => getPublicProjects());
@@ -303,6 +43,11 @@ export default function FeaturedProjects() {
       tutorialCount: tCount,
     };
   }, [projects, activeTab]);
+
+  // If there are no published projects or tutorials yet, cleanly hide the section
+  if (projects.length === 0) {
+    return null;
+  }
 
   return (
     <section
@@ -454,16 +199,20 @@ export default function FeaturedProjects() {
           </div>
         </div>
 
-        {/* Content Grid */}
+        {/* Content Grid using the identical shared ProjectCard */}
         {featuredList.length > 0 ? (
           <div
-            className="projects-grid"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+              gap: 'var(--space-6)',
+            }}
             role="list"
             aria-label="Featured UNIHIKER K10 Projects & Tutorials"
           >
             {featuredList.map((project) => (
-              <div key={project.id} role="listitem">
-                <FeaturedCard project={project} />
+              <div key={project.id} role="listitem" style={{ height: '100%' }}>
+                <ProjectCard project={project} />
               </div>
             ))}
           </div>

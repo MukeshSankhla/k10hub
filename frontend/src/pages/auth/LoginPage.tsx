@@ -62,9 +62,6 @@ export default function LoginPage() {
               <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--color-ink-primary)', letterSpacing: '-0.02em', margin: 0 }}>
                 Welcome to K10 Hub
               </h1>
-              <p style={{ color: 'var(--color-ink-secondary)', fontSize: 'var(--text-sm)', marginTop: 'var(--space-1)' }}>
-                Sign in with your account to access projects, firmware flashing, and creator tools.
-              </p>
             </div>
 
             {/* Unconfigured Alert */}

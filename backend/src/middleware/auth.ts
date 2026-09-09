@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { eq } from 'drizzle-orm';
+import { eq, or } from 'drizzle-orm';
 import { db } from '../config/database';
 import { users } from '../db/schema';
 import { verifyAuthToken, VerifiedAuthUser } from '../services/supabase';
@@ -62,14 +62,33 @@ function extractToken(req: Request): string | null {
  */
 export async function syncOrProvisionUser(verified: VerifiedAuthUser): Promise<DbUser> {
   const normalizedEmail = (verified.email || '').trim().toLowerCase();
-
-  const existing = await db.query.users.findFirst({
-    where: eq(users.supabaseUid, verified.uid),
-  });
-
   const now = Math.floor(Date.now() / 1000);
   const adminList = env.ADMIN_EMAILS.split(',').map((e) => e.trim().toLowerCase());
   const isAdminEmail = Boolean(normalizedEmail && adminList.includes(normalizedEmail));
+
+  // 1. Try finding by Supabase UID first
+  let existing = await db.query.users.findFirst({
+    where: eq(users.supabaseUid, verified.uid),
+  });
+
+  // 2. If not found by UID, check by email (handles seeded users or re-registered Supabase auth)
+  if (!existing && normalizedEmail) {
+    existing = await db.query.users.findFirst({
+      where: eq(users.email, normalizedEmail),
+    });
+
+    if (existing) {
+      // Re-link the existing user to the new Supabase UID
+      await db
+        .update(users)
+        .set({
+          supabaseUid: verified.uid,
+          updatedAt: now,
+        })
+        .where(eq(users.id, existing.id));
+      existing.supabaseUid = verified.uid;
+    }
+  }
 
   if (existing) {
     // If account is suspended, do not refresh lastSignInAt
@@ -84,30 +103,59 @@ export async function syncOrProvisionUser(verified: VerifiedAuthUser): Promise<D
       await db.update(users).set({ role: 'admin', updatedAt: now }).where(eq(users.id, existing.id));
     }
 
-    // Update last login
-    await db.update(users).set({ lastSignInAt: now }).where(eq(users.id, existing.id));
-    return { ...existing, role, lastSignInAt: now } as DbUser;
+    // Update last login and avatar/name if newly provided
+    const updateData: Record<string, any> = {
+      lastSignInAt: now,
+    };
+    if (verified.name && (!existing.name || existing.name === 'Maker' || existing.name.startsWith('user_'))) {
+      updateData.name = verified.name.trim().slice(0, 60);
+    }
+    if (verified.avatarUrl && !existing.avatarUrl) {
+      updateData.avatarUrl = verified.avatarUrl;
+    }
+
+    await db.update(users).set(updateData).where(eq(users.id, existing.id));
+    return { ...existing, ...updateData, role, lastSignInAt: now } as DbUser;
   }
 
   // Determine initial role (admin if configured in ADMIN_EMAILS, else user)
   const initialRole: UserRole = isAdminEmail ? 'admin' : 'user';
 
-  const [inserted] = await db
-    .insert(users)
-    .values({
-      supabaseUid: verified.uid,
-      email: normalizedEmail,
-      name: (verified.name || normalizedEmail.split('@')[0] || 'Maker').trim().slice(0, 60),
-      avatarUrl: verified.avatarUrl || null,
-      role: initialRole,
-      status: 'active',
-      lastSignInAt: now,
-      createdAt: now,
-      updatedAt: now,
-    })
-    .returning();
+  try {
+    const [inserted] = await db
+      .insert(users)
+      .values({
+        supabaseUid: verified.uid,
+        email: normalizedEmail,
+        name: (verified.name || normalizedEmail.split('@')[0] || 'Maker').trim().slice(0, 60),
+        avatarUrl: verified.avatarUrl || null,
+        role: initialRole,
+        status: 'active',
+        lastSignInAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
 
-  return inserted as DbUser;
+    return inserted as DbUser;
+  } catch (insertErr) {
+    // Graceful fallback in case of concurrent insert or race condition
+    const fallback = await db.query.users.findFirst({
+      where: normalizedEmail
+        ? or(eq(users.supabaseUid, verified.uid), eq(users.email, normalizedEmail))
+        : eq(users.supabaseUid, verified.uid),
+    });
+
+    if (fallback) {
+      if (fallback.supabaseUid !== verified.uid) {
+        await db.update(users).set({ supabaseUid: verified.uid, updatedAt: now }).where(eq(users.id, fallback.id));
+        fallback.supabaseUid = verified.uid;
+      }
+      return fallback as DbUser;
+    }
+
+    throw insertErr;
+  }
 }
 
 /**

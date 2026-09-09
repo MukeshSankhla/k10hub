@@ -153,6 +153,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const trimmedEmail = email.trim().toLowerCase();
       const trimmedName = fullName.trim();
 
+      // 1. First attempt registration via backend admin API (bypasses SMTP rate limits)
+      try {
+        const regRes = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: trimmedEmail,
+            password,
+            name: trimmedName,
+          }),
+        });
+
+        const regData = await regRes.json();
+
+        if (regRes.status === 409) {
+          return { error: 'An account with this email address already exists. Please sign in instead.' };
+        }
+
+        if (regRes.ok && regData.success) {
+          // Auto-sign in with the newly confirmed credentials
+          const loginRes = await signInWithEmail(trimmedEmail, password);
+          if (loginRes.error) {
+            return { confirmationRequired: false, error: loginRes.error };
+          }
+          return { confirmationRequired: false };
+        }
+
+        if (!regRes.ok && regData.error && regData.error !== 'SUPABASE_NOT_CONFIGURED') {
+          return { error: regData.message || 'Failed to create account.' };
+        }
+      } catch (backendErr) {
+        console.warn('Backend registration failed, trying client signUp fallback:', backendErr);
+      }
+
+      // 2. Client fallback
       const { data, error } = await supabase.auth.signUp({
         email: trimmedEmail,
         password,
@@ -165,6 +200,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (error) {
+        if (error.message.toLowerCase().includes('rate limit')) {
+          return {
+            error: 'Email rate limit reached on Supabase. If you already have an account, please click "Sign in" below.',
+          };
+        }
         return { error: error.message };
       }
 

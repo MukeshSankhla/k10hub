@@ -3,8 +3,21 @@
 
 import { ProjectDetail } from '../../config/projectsData';
 
-const STORAGE_KEY = 'k10_projects_store_v2';
+const STORAGE_KEY = 'k10_projects_store_v3';
 const UPDATE_EVENT = 'k10_projects_updated';
+
+// Self-executing cleanup to wipe legacy dummy projects and old cached data across browser sessions
+try {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    localStorage.removeItem('k10_projects_store_v2');
+    localStorage.removeItem('k10_projects_store_v1');
+    localStorage.removeItem('k10_projects_store');
+    localStorage.removeItem('k10_authors_profile_cache');
+    localStorage.removeItem('k10_flash_counts');
+  }
+} catch (e) {
+  // Ignore storage access errors
+}
 
 /**
  * Normalizes an array of projects, ensuring defaults and integrity.
@@ -18,8 +31,14 @@ function getStoredProjects(): ProjectDetail[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      // Clean up legacy sample project if present
-      const filtered = parsed.filter((p) => p && p.id && p.id !== 'esp32-p4-display');
+      // Clean up any legacy dummy sample projects if present
+      const filtered = parsed.filter(
+        (p) =>
+          p &&
+          p.id &&
+          p.id !== 'esp32-p4-display' &&
+          !p.title?.toLowerCase().includes('getting started with unihiker')
+      );
       if (filtered.length !== parsed.length) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
       }
@@ -29,6 +48,23 @@ function getStoredProjects(): ProjectDetail[] {
   } catch (err) {
     console.warn('Could not parse stored projects:', err);
     return [];
+  }
+}
+
+/**
+ * Manually clears all project and author storage from the browser.
+ */
+export function clearAllProjectStorage(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem('k10_projects_store_v2');
+    localStorage.removeItem('k10_projects_store_v1');
+    localStorage.removeItem('k10_projects_store');
+    localStorage.removeItem('k10_authors_profile_cache');
+    localStorage.removeItem('k10_flash_counts');
+    window.dispatchEvent(new CustomEvent(UPDATE_EVENT));
+  } catch (err) {
+    console.warn('Failed to clear project storage:', err);
   }
 }
 

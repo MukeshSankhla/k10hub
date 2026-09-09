@@ -1,10 +1,11 @@
-import { Router, Response } from 'express';
+import { Router, Response, Request } from 'express';
 import { z } from 'zod';
 import { eq, desc, or, like, and } from 'drizzle-orm';
 import { db } from '../../config/database';
 import { users, authorApplications, authors } from '../../db/schema';
-import { requireAuth, AuthRequest } from '../../middleware/auth';
+import { requireAuth, AuthRequest, syncOrProvisionUser } from '../../middleware/auth';
 import { projectService } from '../../services/ProjectService';
+import { getSupabaseClient } from '../../services/supabase';
 
 const router = Router();
 
@@ -42,6 +43,85 @@ const updateProfileSchema = z.object({
   instagramUrl: safeHttpUrl.optional().or(z.literal('')),
   youtubeUrl: safeHttpUrl.optional().or(z.literal('')),
   linkedinUrl: safeHttpUrl.optional().or(z.literal('')),
+});
+
+const registerSchema = z.object({
+  email: z.string().trim().email('Please enter a valid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters long'),
+  name: z.string().trim().min(2, 'Name must be at least 2 characters long').max(60),
+});
+
+/**
+ * POST /api/auth/register
+ * Maker account creation via Supabase Admin API with auto-confirmed email.
+ * Bypasses public SMTP rate limits and delivers instant active account.
+ */
+router.post('/register', async (req: Request, res: Response) => {
+  try {
+    const parseResult = registerSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        message: parseResult.error.errors[0]?.message || 'Invalid registration data',
+      });
+    }
+
+    const { email, password, name } = parseResult.data;
+    const normalizedEmail = email.toLowerCase();
+    const supabase = getSupabaseClient();
+
+    if (!supabase) {
+      return res.status(500).json({
+        error: 'SUPABASE_NOT_CONFIGURED',
+        message: 'Authentication service is not configured on the backend.',
+      });
+    }
+
+    // Use admin client to create pre-confirmed user (bypasses SMTP rate limits)
+    const { data, error } = await supabase.auth.admin.createUser({
+      email: normalizedEmail,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        name,
+        full_name: name,
+      },
+    });
+
+    if (error) {
+      const msg = error.message || 'Failed to create user';
+      if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('exists')) {
+        return res.status(409).json({
+          error: 'USER_ALREADY_EXISTS',
+          message: 'An account with this email address already exists. Please sign in instead.',
+        });
+      }
+      return res.status(400).json({
+        error: 'REGISTRATION_FAILED',
+        message: msg,
+      });
+    }
+
+    if (data.user) {
+      // Sync into local database
+      await syncOrProvisionUser({
+        uid: data.user.id,
+        email: normalizedEmail,
+        name,
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Account created successfully.',
+    });
+  } catch (error: any) {
+    console.error('Registration error:', error);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: error.message || 'An unexpected error occurred during registration.',
+    });
+  }
 });
 
 /**
