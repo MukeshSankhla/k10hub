@@ -23,7 +23,7 @@ import {
   Check,
 } from 'lucide-react';
 import { ProjectDetail, FirmwareConfig, AVAILABLE_TOPICS } from '../../config/projectsData';
-import { saveProject, parseVideoEmbedUrl } from '../../services/projects/projectStorageService';
+import { saveProject, parseVideoEmbedUrl, formatCurrentPublishDate } from '../../services/projects/projectStorageService';
 
 interface ProjectEditorModalProps {
   isOpen: boolean;
@@ -67,7 +67,7 @@ export default function ProjectEditorModal({
     {
       version: 'v1.0.0',
       name: 'Default Release Edition',
-      releaseDate: new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      releaseDate: formatCurrentPublishDate(),
       firmwareUrl: '',
       flashAddress: '0x00',
       versionNote: 'Initial release build for UNIHIKER K10.',
@@ -143,7 +143,7 @@ export default function ProjectEditorModal({
           {
             version: 'v1.0.0',
             name: 'Initial Release',
-            releaseDate: new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+            releaseDate: formatCurrentPublishDate(),
             firmwareUrl: '',
             flashAddress: '0x00',
             versionNote: 'Standard firmware binary.',
@@ -197,7 +197,7 @@ export default function ProjectEditorModal({
       {
         version: `v1.${firmwares.length}.0`,
         name: `Firmware Edition ${firmwares.length + 1}`,
-        releaseDate: new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+        releaseDate: formatCurrentPublishDate(),
         firmwareUrl: '',
         flashAddress: '0x00',
         versionNote: 'New release edition.',
@@ -266,7 +266,7 @@ export default function ProjectEditorModal({
         author: author.trim() || 'Mukesh Sankhla',
         authorRole: authorRole.trim() || 'Author',
         authorAvatar: authorAvatar.trim() || undefined,
-        publishDate: activeInitial?.publishDate || new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+        publishDate: activeInitial?.publishDate || formatCurrentPublishDate(),
         flashCount: activeInitial?.flashCount || 0,
         description: description.trim(),
         coverImage: coverImage.trim() || 'https://raw.githubusercontent.com/MukeshSankhla/ESP32_P4_DSI/main/images/DIY.gif',
@@ -1113,7 +1113,7 @@ export default function ProjectEditorModal({
             ) : (
               <>
                 <CheckCircle2 size={15} />
-                <span>{initialProject ? 'Save Changes' : `Publish ${type}`}</span>
+                <span>{initialProject ? 'Update' : 'Publish'}</span>
               </>
             )}
           </button>

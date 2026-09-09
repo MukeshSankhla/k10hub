@@ -445,13 +445,45 @@ export function getProjectById(id: string): ProjectDetail | undefined {
 }
 
 /**
+ * Formats a Date into 'DD MMM YYYY, hh:mm A' (e.g. '09 Sep 2026, 06:48 PM')
+ * automatically picking current date and time.
+ */
+export function formatCurrentPublishDate(input?: Date | string | number): string {
+  let d = new Date();
+  if (input instanceof Date) {
+    d = input;
+  } else if (typeof input === 'number') {
+    d = new Date(input);
+  } else if (typeof input === 'string' && input.trim()) {
+    const parsed = new Date(input);
+    if (!isNaN(parsed.getTime())) {
+      d = parsed;
+    }
+  }
+
+  const day = String(d.getDate()).padStart(2, '0');
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = months[d.getMonth()];
+  const year = d.getFullYear();
+
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  const strHours = String(hours).padStart(2, '0');
+
+  return `${day} ${month} ${year}, ${strHours}:${minutes} ${ampm}`;
+}
+
+/**
  * Creates or updates a project/tutorial.
  * Automatically stamps publishDate and firmware releaseDate.
  */
 export function saveProject(project: ProjectDetail): ProjectDetail {
   const all = getStoredProjects();
   const existingIdx = all.findIndex((p) => p.id.toLowerCase() === project.id.toLowerCase());
-  const currentDate = new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  const currentDate = formatCurrentPublishDate();
 
   const firmwares = Array.isArray(project.firmwares) && project.firmwares.length > 0
     ? project.firmwares.map(f => ({
@@ -473,7 +505,7 @@ export function saveProject(project: ProjectDetail): ProjectDetail {
     ...project,
     status: project.status || 'draft',
     visibility: project.visibility || (project.status === 'published' ? 'public' : 'draft'),
-    publishDate: project.publishDate || currentDate,
+    publishDate: project.publishDate || (project.status === 'published' ? currentDate : ''),
     coverImage: normalizeImageUrl(project.coverImage) || project.coverImage,
     projectMdFile: normalizeMarkdownUrl(project.projectMdFile) || null,
     license: project.license || 'MIT',
@@ -552,10 +584,10 @@ export function approveProject(id: string): boolean {
   const project = all.find((p) => p.id.toLowerCase() === cleanId);
   if (!project) return false;
 
-  const currentDate = new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  const currentDate = formatCurrentPublishDate();
   project.status = 'published';
   project.visibility = 'public';
-  project.publishDate = currentDate;
+  project.publishDate = project.publishDate || currentDate;
 
   persistProjects(all);
   return true;

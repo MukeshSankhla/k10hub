@@ -8,6 +8,7 @@ import { ProjectDetail, FirmwareConfig, AVAILABLE_TOPICS } from '../../config/pr
 import {
   getProjectById,
   saveProject,
+  formatCurrentPublishDate,
   parseVideoEmbedUrl,
   isProjectAuthor,
   normalizeImageUrl,
@@ -27,6 +28,7 @@ import {
   Eye,
   ShieldAlert,
   Check,
+  CheckCircle2,
 } from 'lucide-react';
 
 export default function ProjectEditorPage() {
@@ -80,7 +82,7 @@ export default function ProjectEditorPage() {
     {
       version: 'v1.0.0',
       name: 'Default Production Edition',
-      releaseDate: new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      releaseDate: formatCurrentPublishDate(),
       firmwareUrl: '',
       flashAddress: '0x0000',
       versionNote: 'Initial release build for UNIHIKER K10.',
@@ -189,7 +191,7 @@ export default function ProjectEditorPage() {
       {
         version: `v1.${firmwares.length}.0`,
         name: 'New Firmware Edition',
-        releaseDate: new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+        releaseDate: formatCurrentPublishDate(),
         firmwareUrl: '',
         flashAddress: '0x0000',
         versionNote: '',
@@ -284,7 +286,7 @@ export default function ProjectEditorPage() {
 
       const nextStatus = targetStatus || status;
       const nextVisibility = nextStatus === 'published' ? 'public' : 'draft';
-      const currentDate = new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      const currentDate = formatCurrentPublishDate();
 
       // Automatically assign release date to firmwares
       const stampedFirmwares = firmwares
@@ -352,7 +354,10 @@ export default function ProjectEditorPage() {
         );
         navigate('/profile?tab=draft#contributed-projects');
       } else {
-        toast.success('Project published successfully!', 'Published');
+        toast.success(
+          isEditing ? `${type} updated successfully!` : `${type} published successfully!`,
+          isEditing ? 'Updated' : 'Published'
+        );
         // Navigate to project detail page
         navigate(`/project/${cleanSlug}`);
       }
@@ -434,7 +439,7 @@ export default function ProjectEditorPage() {
               </span>
             </div>
 
-            {/* Top Action Buttons: Draft & Submit for Review / Publish */}
+            {/* Top Action Buttons: Draft & Submit for Review / Publish / Update */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
               <button
                 type="button"
@@ -443,24 +448,36 @@ export default function ProjectEditorPage() {
               >
                 Cancel
               </button>
+              {!isEditing && (
+                <button
+                  type="button"
+                  onClick={() => handleSave('draft')}
+                  disabled={isSaving}
+                  className="btn btn--secondary btn--sm"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                >
+                  <Save size={14} /> Save Draft
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => handleSave('draft')}
-                disabled={isSaving}
-                className="btn btn--secondary btn--sm"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-              >
-                <Save size={14} /> Save Draft
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSave(role === 'admin' ? 'published' : 'pending_approval')}
+                onClick={() =>
+                  handleSave(
+                    isEditing
+                      ? (existingProject?.status === 'published' || role === 'admin' ? 'published' : 'pending_approval')
+                      : role === 'admin'
+                      ? 'published'
+                      : 'pending_approval'
+                  )
+                }
                 disabled={isSaving}
                 className="btn btn--primary btn--sm"
                 style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
               >
                 {isSaving ? (
                   <Loader2 size={14} className="animate-spin" />
+                ) : isEditing ? (
+                  <CheckCircle2 size={14} />
                 ) : role === 'admin' ? (
                   <Sparkles size={14} />
                 ) : (
@@ -468,8 +485,10 @@ export default function ProjectEditorPage() {
                 )}
                 {isSaving
                   ? 'Saving...'
+                  : isEditing
+                  ? 'Update'
                   : role === 'admin'
-                  ? 'Publish Project'
+                  ? 'Publish'
                   : 'Submit for Review'}
               </button>
             </div>
@@ -1400,25 +1419,37 @@ export default function ProjectEditorPage() {
                   Cancel
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => handleSave('draft')}
-                  disabled={isSaving}
-                  className="btn btn--secondary"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
-                >
-                  <Save size={16} /> Save Draft
-                </button>
+                {!isEditing && (
+                  <button
+                    type="button"
+                    onClick={() => handleSave('draft')}
+                    disabled={isSaving}
+                    className="btn btn--secondary"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                  >
+                    <Save size={16} /> Save Draft
+                  </button>
+                )}
 
                 <button
                   type="button"
-                  onClick={() => handleSave(role === 'admin' ? 'published' : 'pending_approval')}
+                  onClick={() =>
+                    handleSave(
+                      isEditing
+                        ? (existingProject?.status === 'published' || role === 'admin' ? 'published' : 'pending_approval')
+                        : role === 'admin'
+                        ? 'published'
+                        : 'pending_approval'
+                    )
+                  }
                   disabled={isSaving}
                   className="btn btn--primary"
                   style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
                 >
                   {isSaving ? (
                     <Loader2 size={16} className="animate-spin" />
+                  ) : isEditing ? (
+                    <CheckCircle2 size={16} />
                   ) : role === 'admin' ? (
                     <Sparkles size={16} />
                   ) : (
@@ -1426,8 +1457,10 @@ export default function ProjectEditorPage() {
                   )}
                   {isSaving
                     ? 'Saving...'
+                    : isEditing
+                    ? 'Update'
                     : role === 'admin'
-                    ? 'Publish Project'
+                    ? 'Publish'
                     : 'Submit for Review'}
                 </button>
               </div>

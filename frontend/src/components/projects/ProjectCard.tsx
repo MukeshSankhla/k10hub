@@ -1,9 +1,20 @@
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar, Zap, Star } from 'lucide-react';
+import { Calendar, Zap, Star, Heart, Bookmark, MessageSquare } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { toast } from '../../contexts/ToastContext';
 import { ProjectDetail } from '../../config/projectsData';
 import { resolveProjectAuthor } from '../../services/projects/projectStorageService';
 import { getLocalFlashCount } from '../../services/flasher/flashCountService';
+import {
+  getProjectLikeCount,
+  isProjectLiked,
+  toggleProjectLike,
+  isProjectBookmarked,
+  toggleProjectBookmark,
+  getProjectCommentCount,
+  subscribeCommunity,
+} from '../../services/community/communityService';
 import UserBadge from '../common/UserBadge';
 
 export function getLevelLabel(level: number | string | undefined): string {
@@ -44,6 +55,23 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
   const isTutorial = project.type?.toLowerCase() === 'tutorial';
   const isFeatured = Boolean(project.featured || project.isFeatured);
   const flashes = Math.max(project.flashCount || 0, getLocalFlashCount(project.id));
+
+  // Community state
+  const [likeCount, setLikeCount] = useState<number>(() => getProjectLikeCount(project.id));
+  const [isLiked, setIsLiked] = useState<boolean>(() => isProjectLiked(project.id, user?.id || profile?.id));
+  const [isBookmarked, setIsBookmarked] = useState<boolean>(() => isProjectBookmarked(project.id, user?.id || profile?.id));
+  const [commentCount, setCommentCount] = useState<number>(() => getProjectCommentCount(project.id));
+
+  useEffect(() => {
+    const update = () => {
+      setLikeCount(getProjectLikeCount(project.id));
+      setIsLiked(isProjectLiked(project.id, user?.id || profile?.id));
+      setIsBookmarked(isProjectBookmarked(project.id, user?.id || profile?.id));
+      setCommentCount(getProjectCommentCount(project.id));
+    };
+    const unsub = subscribeCommunity(update);
+    return unsub;
+  }, [project.id, user?.id, profile?.id]);
 
   return (
     <div
@@ -115,6 +143,52 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
           >
             {getLevelLabel(project.level)}
           </div>
+
+          {/* Top-Right Bookmark Button */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const currentUserId = user?.id || profile?.id;
+              if (!currentUserId) {
+                toast.warning('Please sign in to bookmark projects.', 'Sign In Required');
+                return;
+              }
+              try {
+                const bookmarked = toggleProjectBookmark(project.id, String(currentUserId));
+                setIsBookmarked(bookmarked);
+                if (bookmarked) {
+                  toast.success('Bookmarked! View in Profile.', 'Saved');
+                } else {
+                  toast.info('Removed bookmark.');
+                }
+              } catch (err: any) {
+                toast.warning(err.message || 'Please sign in to bookmark projects.');
+              }
+            }}
+            style={{
+              position: 'absolute',
+              top: 10,
+              right: 10,
+              zIndex: 3,
+              backgroundColor: isBookmarked ? 'var(--color-accent)' : 'rgba(0, 0, 0, 0.65)',
+              backdropFilter: 'blur(4px)',
+              border: isBookmarked ? 'none' : '1px solid rgba(255, 255, 255, 0.2)',
+              color: '#fff',
+              borderRadius: '6px',
+              width: 26,
+              height: 26,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+            title={isBookmarked ? 'Remove from bookmarks' : 'Bookmark this project'}
+          >
+            <Bookmark size={13} fill={isBookmarked ? '#fff' : 'none'} />
+          </button>
 
           {/* Featured Pill if marked as featured */}
           {isFeatured && (
@@ -213,6 +287,7 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
             paddingTop: 'var(--space-3)',
             borderTop: '1px solid var(--color-border)',
             marginTop: 'auto',
+            gap: '8px',
           }}
         >
           {/* Clickable Author Profile Link */}
@@ -221,9 +296,11 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '8px',
+              gap: '6px',
               textDecoration: 'none',
               color: 'inherit',
+              minWidth: 0,
+              flexShrink: 1,
             }}
             title={isMine ? 'View your profile' : `View ${authorInfo.name}'s profile`}
           >
@@ -231,7 +308,7 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
               <img
                 src={authorInfo.avatarUrl}
                 alt={authorInfo.name}
-                style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover' }}
+                style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
               />
             ) : (
               <div
@@ -246,6 +323,7 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  flexShrink: 0,
                 }}
               >
                 {authorInfo.name.charAt(0)}
@@ -256,7 +334,7 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
                 fontSize: '11px',
                 fontWeight: 600,
                 color: 'var(--color-ink-primary)',
-                maxWidth: 120,
+                maxWidth: 90,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -276,8 +354,16 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
             />
           </Link>
 
-          {/* Date & Flash Count */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* Metrics: Flashes, Likes, Comments, Date */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
+            }}
+          >
             <span
               style={{
                 display: 'inline-flex',
@@ -293,18 +379,78 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
               <span>{flashes}</span>
             </span>
 
-            <div
+            {/* Likes */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const currentUserId = user?.id || profile?.id;
+                if (!currentUserId) {
+                  toast.warning('Please sign in to like projects.', 'Sign In Required');
+                  return;
+                }
+                try {
+                  const res = toggleProjectLike(project.id, String(currentUserId));
+                  setIsLiked(res.liked);
+                  setLikeCount(res.count);
+                } catch (err: any) {
+                  toast.warning(err.message || 'Please sign in to like projects.');
+                }
+              }}
               style={{
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
-                gap: '4px',
+                gap: '3px',
+                fontSize: '11px',
+                fontWeight: 600,
+                color: isLiked ? '#ef4444' : 'var(--color-ink-tertiary)',
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+              }}
+              title={isLiked ? 'Unlike' : 'Like'}
+            >
+              <Heart size={12} fill={isLiked ? '#ef4444' : 'none'} color={isLiked ? '#ef4444' : 'currentColor'} />
+              <span>{likeCount}</span>
+            </button>
+
+            {/* Comments */}
+            <Link
+              to={`/project/${project.id}#discussion`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
                 fontSize: '11px',
                 fontWeight: 500,
                 color: 'var(--color-ink-tertiary)',
+                textDecoration: 'none',
               }}
+              title={`${commentCount} comments`}
             >
-              <Calendar size={12} style={{ color: 'var(--color-ink-tertiary)' }} />
-              <span>{project.publishDate || 'Recent'}</span>
+              <MessageSquare size={11} />
+              <span>{commentCount}</span>
+            </Link>
+
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+                fontSize: '11px',
+                fontWeight: 500,
+                color: 'var(--color-ink-tertiary)',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
+              title={project.publishDate || 'Recent'}
+            >
+              <Calendar size={11} style={{ color: 'var(--color-ink-tertiary)', flexShrink: 0 }} />
+              <span style={{ whiteSpace: 'nowrap' }}>
+                {project.publishDate ? (project.publishDate.includes(',') ? project.publishDate.split(',')[0] : project.publishDate) : 'Recent'}
+              </span>
             </div>
           </div>
         </div>

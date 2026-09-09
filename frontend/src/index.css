@@ -515,9 +515,9 @@ button {
 
 /* ─── Hero ───────────────────────────────────────────────────────────────────── */
 .hero {
-  padding-top: calc(var(--nav-height) + clamp(var(--space-6), 3.5vh, var(--space-14)));
-  padding-bottom: clamp(var(--space-10), 5vh, var(--space-18));
-  min-height: calc(100svh - var(--nav-height));
+  padding-top: calc(var(--nav-height) + clamp(var(--space-3), 2vh, var(--space-5)));
+  padding-bottom: clamp(var(--space-4), 2.5vh, var(--space-6));
+  min-height: auto;
   display: flex;
   align-items: center;
   position: relative;
@@ -541,7 +541,7 @@ button {
   z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.2fr);
-  gap: clamp(var(--space-8), 4vw, var(--space-16));
+  gap: clamp(var(--space-6), 3vw, var(--space-12));
   align-items: center;
   width: 100%;
 }
@@ -549,8 +549,8 @@ button {
 .hero__content {
   display: flex;
   flex-direction: column;
-  gap: clamp(var(--space-5), 2.2vh, var(--space-8));
-  max-width: 680px;
+  gap: clamp(var(--space-3), 1.5vh, var(--space-5));
+  max-width: 640px;
 }
 
 .hero__eyebrow {
@@ -909,8 +909,8 @@ button {
 .hero__model-container {
   position: relative;
   width: 100%;
-  height: clamp(540px, 68vh, 840px);
-  min-height: 520px;
+  height: clamp(300px, 42vh, 420px);
+  min-height: 280px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2177,4 +2177,35 @@ button {
     opacity: 1;
   }
 }
+
+/* Reddit-style Community Comment Threads */
+.reddit-thread-line:hover {
+  background-color: var(--color-accent) !important;
+}
+
+/* 4-column Homepage Featured Showcase Grid */
+.featured-showcase-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-6);
+}
+
+@media (max-width: 1280px) {
+  .featured-showcase-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .featured-showcase-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 580px) {
+  .featured-showcase-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 

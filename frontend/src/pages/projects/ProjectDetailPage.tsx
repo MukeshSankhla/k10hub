@@ -19,7 +19,20 @@ import {
   AlertCircle,
   Clock,
   Star,
+  Heart,
+  Bookmark,
+  MessageSquare,
 } from 'lucide-react';
+import ProjectCommentsSection from '../../components/community/ProjectCommentsSection';
+import {
+  getProjectLikeCount,
+  isProjectLiked,
+  toggleProjectLike,
+  isProjectBookmarked,
+  toggleProjectBookmark,
+  getProjectCommentCount,
+  subscribeCommunity,
+} from '../../services/community/communityService';
 import { subscribeProjectFlashCount } from '../../services/flasher/flashCountService';
 import {
   getProjectById as getStoredProjectById,
@@ -57,6 +70,34 @@ export default function ProjectDetailPage() {
 
   const [flashCount, setFlashCount] = useState<number>(() => currentProject?.flashCount || 0);
   const [copiedLink, setCopiedLink] = useState(false);
+
+  // Community state (Likes, Bookmarks, Comments)
+  const [likeCount, setLikeCount] = useState<number>(() =>
+    id ? getProjectLikeCount(id) : 0
+  );
+  const [isLiked, setIsLiked] = useState<boolean>(() =>
+    id ? isProjectLiked(id, user?.id || profile?.id) : false
+  );
+  const [isBookmarked, setIsBookmarked] = useState<boolean>(() =>
+    id ? isProjectBookmarked(id, user?.id || profile?.id) : false
+  );
+  const [commentCount, setCommentCount] = useState<number>(() =>
+    id ? getProjectCommentCount(id) : 0
+  );
+
+  // Sync community state
+  useEffect(() => {
+    if (!id) return;
+    const updateStats = () => {
+      setLikeCount(getProjectLikeCount(id));
+      setIsLiked(isProjectLiked(id, user?.id || profile?.id));
+      setIsBookmarked(isProjectBookmarked(id, user?.id || profile?.id));
+      setCommentCount(getProjectCommentCount(id));
+    };
+    updateStats();
+    const unsub = subscribeCommunity(updateStats);
+    return unsub;
+  }, [id, user?.id, profile?.id]);
 
   // Subscribe to real-time Firestore flash count
   useEffect(() => {
@@ -108,6 +149,45 @@ export default function ProjectDetailPage() {
         toast.success('Project link copied to clipboard!');
         setTimeout(() => setCopiedLink(false), 1500);
       });
+    }
+  };
+
+  const handleToggleLike = () => {
+    if (!currentProject) return;
+    const currentUserId = user?.id || profile?.id;
+    if (!currentUserId) {
+      toast.warning('Please sign in to like this project.', 'Sign In Required');
+      return;
+    }
+    try {
+      const res = toggleProjectLike(currentProject.id, String(currentUserId));
+      setIsLiked(res.liked);
+      setLikeCount(res.count);
+      if (res.liked) {
+        toast.success('Liked! Added to your appreciated builds.');
+      }
+    } catch (err: any) {
+      toast.warning(err.message || 'Please sign in to like projects.');
+    }
+  };
+
+  const handleToggleBookmark = () => {
+    if (!currentProject) return;
+    const currentUserId = user?.id || profile?.id;
+    if (!currentUserId) {
+      toast.warning('Please sign in to bookmark projects.', 'Sign In Required');
+      return;
+    }
+    try {
+      const bookmarked = toggleProjectBookmark(currentProject.id, String(currentUserId));
+      setIsBookmarked(bookmarked);
+      if (bookmarked) {
+        toast.success('Project bookmarked! View it anytime in your Profile.', 'Saved to Bookmarks');
+      } else {
+        toast.info('Removed from bookmarks.');
+      }
+    } catch (err: any) {
+      toast.warning(err.message || 'Please sign in to bookmark projects.');
     }
   };
 
@@ -530,6 +610,51 @@ export default function ProjectDetailPage() {
                         </button>
                       )}
 
+                      {/* Like Button */}
+                      <button
+                        type="button"
+                        onClick={handleToggleLike}
+                        className="btn btn--secondary"
+                        title={isLiked ? 'Unlike' : 'Like this project'}
+                        style={{
+                          ...heroBtnStyle,
+                          color: isLiked ? '#ef4444' : 'var(--color-ink-primary)',
+                          backgroundColor: isLiked ? 'rgba(239, 68, 68, 0.08)' : undefined,
+                          borderColor: isLiked ? 'rgba(239, 68, 68, 0.35)' : undefined,
+                        }}
+                      >
+                        <Heart size={15} fill={isLiked ? '#ef4444' : 'none'} color={isLiked ? '#ef4444' : 'currentColor'} />
+                        <span>{likeCount} {likeCount === 1 ? 'Like' : 'Likes'}</span>
+                      </button>
+
+                      {/* Bookmark Button */}
+                      <button
+                        type="button"
+                        onClick={handleToggleBookmark}
+                        className="btn btn--secondary"
+                        title={isBookmarked ? 'Remove from bookmarks' : 'Bookmark this project'}
+                        style={{
+                          ...heroBtnStyle,
+                          color: isBookmarked ? 'var(--color-accent)' : 'var(--color-ink-primary)',
+                          backgroundColor: isBookmarked ? 'var(--color-accent-muted)' : undefined,
+                          borderColor: isBookmarked ? 'var(--color-accent-light)' : undefined,
+                        }}
+                      >
+                        <Bookmark size={15} fill={isBookmarked ? 'var(--color-accent)' : 'none'} color={isBookmarked ? 'var(--color-accent)' : 'currentColor'} />
+                        <span>{isBookmarked ? 'Saved' : 'Bookmark'}</span>
+                      </button>
+
+                      {/* Jump to Discussion Button */}
+                      <a
+                        href="#discussion"
+                        className="btn btn--secondary"
+                        title="Jump to community discussion"
+                        style={heroBtnStyle}
+                      >
+                        <MessageSquare size={15} />
+                        <span>{commentCount} {commentCount === 1 ? 'Comment' : 'Comments'}</span>
+                      </a>
+
                       <button
                         type="button"
                         onClick={handleShare}
@@ -650,6 +775,7 @@ export default function ProjectDetailPage() {
               )}
 
               <ProjectDocumentation project={project} />
+              <ProjectCommentsSection project={project} />
             </div>
 
             {/* 1 COLUMN: Firmware Flashing Station */}

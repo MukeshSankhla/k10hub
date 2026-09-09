@@ -31,9 +31,15 @@ import {
   ArrowLeft,
   Lock,
   AlertTriangle,
+  Bookmark,
 } from 'lucide-react';
 import { ProjectDetail } from '../../config/projectsData';
 import { toast } from '../../contexts/ToastContext';
+import {
+  getUserBookmarkedProjects,
+  toggleProjectBookmark,
+  subscribeCommunity,
+} from '../../services/community/communityService';
 import {
   getAllProjects,
   deleteProject,
@@ -175,17 +181,33 @@ export default function ProfilePage() {
     ? allProjects.filter((p) => isProjectAuthor(p, user, profile))
     : publicAuthorProjects;
 
-  const resolveInitialTab = (): 'published' | 'draft' | 'pending_approval' => {
+  // Bookmarked projects
+  const [bookmarkedProjects, setBookmarkedProjects] = useState<ProjectDetail[]>(() =>
+    getUserBookmarkedProjects(user?.id || profile?.id)
+  );
+
+  useEffect(() => {
+    const updateBookmarks = () => {
+      setBookmarkedProjects(getUserBookmarkedProjects(user?.id || profile?.id));
+    };
+    updateBookmarks();
+    const unsub = subscribeCommunity(updateBookmarks);
+    return unsub;
+  }, [user?.id, profile?.id]);
+
+  const resolveInitialTab = (): 'published' | 'draft' | 'pending_approval' | 'bookmarked' => {
     const tabParam = searchParams.get('tab');
     if (tabParam === 'draft') return 'draft';
     if (tabParam === 'review' || tabParam === 'pending_approval') return 'pending_approval';
     if (tabParam === 'published') return 'published';
+    if (tabParam === 'bookmarked' || tabParam === 'bookmarks' || tabParam === 'saved') return 'bookmarked';
     if (location.hash === '#draft' || location.hash === '#drafts') return 'draft';
     if (location.hash === '#review') return 'pending_approval';
+    if (location.hash === '#bookmarks' || location.hash === '#saved') return 'bookmarked';
     return 'published';
   };
 
-  const [projectStatusFilter, setProjectStatusFilter] = useState<'published' | 'draft' | 'pending_approval'>(resolveInitialTab);
+  const [projectStatusFilter, setProjectStatusFilter] = useState<'published' | 'draft' | 'pending_approval' | 'bookmarked'>(resolveInitialTab);
 
   // Sync tab with URL search parameter or hash
   useEffect(() => {
@@ -196,14 +218,18 @@ export default function ProfilePage() {
       setProjectStatusFilter('pending_approval');
     } else if (tabParam === 'published') {
       setProjectStatusFilter('published');
+    } else if (tabParam === 'bookmarked' || tabParam === 'bookmarks' || tabParam === 'saved') {
+      setProjectStatusFilter('bookmarked');
     } else if (location.hash === '#draft' || location.hash === '#drafts') {
       setProjectStatusFilter('draft');
     } else if (location.hash === '#review') {
       setProjectStatusFilter('pending_approval');
+    } else if (location.hash === '#bookmarks' || location.hash === '#saved') {
+      setProjectStatusFilter('bookmarked');
     }
   }, [searchParams, location.hash]);
 
-  const handleSelectTab = (tabId: 'published' | 'draft' | 'pending_approval') => {
+  const handleSelectTab = (tabId: 'published' | 'draft' | 'pending_approval' | 'bookmarked') => {
     setProjectStatusFilter(tabId);
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -215,12 +241,15 @@ export default function ProfilePage() {
   const [projectTypeFilter, setProjectTypeFilter] = useState<'all' | 'Project' | 'Tutorial'>('all');
 
   const statusFilteredProjects = useMemo(() => {
+    if (projectStatusFilter === 'bookmarked') {
+      return bookmarkedProjects;
+    }
     return projectsList.filter((p) => {
       if (!isOwnProfile) return p.status === 'published' || !p.status;
       if (projectStatusFilter === 'published') return p.status === 'published' || !p.status;
       return p.status === projectStatusFilter;
     });
-  }, [projectsList, isOwnProfile, projectStatusFilter]);
+  }, [projectsList, isOwnProfile, projectStatusFilter, bookmarkedProjects]);
 
   const displayedProjects = useMemo(() => {
     return statusFilteredProjects.filter((p) => {
@@ -920,6 +949,7 @@ export default function ProfilePage() {
                       { id: 'published', label: 'Published', count: projectsList.filter(p => p.status === 'published' || !p.status).length },
                       { id: 'draft', label: 'Draft', count: projectsList.filter(p => p.status === 'draft').length },
                       { id: 'pending_approval', label: 'Review', count: projectsList.filter(p => p.status === 'pending_approval').length },
+                      { id: 'bookmarked', label: 'Bookmarks', count: bookmarkedProjects.length },
                     ].map((tab) => (
                       <button
                         key={tab.id}
@@ -1192,16 +1222,64 @@ export default function ProfilePage() {
                               display: 'flex',
                               alignItems: 'center',
                               gap: '8px',
-                              paddingTop: 'var(--space-3)',
-                              marginTop: 'var(--space-2)',
+                              padding: 'var(--space-3) var(--space-4)',
                               borderTop: '1px solid var(--color-border)',
-                              width: '100%',
+                              backgroundColor: 'var(--color-surface)',
                             }}
                           >
-                            {(role === 'author' || role === 'admin') ? (
+                            {projectStatusFilter === 'bookmarked' ? (
                               <>
                                 <Link
-                                  to={`/project/${project.id}/edit`}
+                                  to={`/project/${project.id}`}
+                                  className="btn btn--primary"
+                                  style={{
+                                    flex: 1,
+                                    height: '32px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '5px',
+                                    fontSize: '12px',
+                                    fontWeight: 600,
+                                    padding: '0 10px',
+                                    borderRadius: '8px',
+                                    textDecoration: 'none',
+                                    boxSizing: 'border-box',
+                                  }}
+                                >
+                                  <Eye size={13} /> View Build
+                                </Link>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    toggleProjectBookmark(project.id, user?.id || profile?.id);
+                                    setBookmarkedProjects(getUserBookmarkedProjects(user?.id || profile?.id));
+                                    toast.info('Removed from bookmarks.');
+                                  }}
+                                  className="btn btn--secondary"
+                                  title="Remove from Bookmarks"
+                                  style={{
+                                    width: '34px',
+                                    height: '32px',
+                                    minWidth: '34px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: 0,
+                                    borderRadius: '8px',
+                                    color: 'var(--color-accent)',
+                                    boxSizing: 'border-box',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <Bookmark size={14} fill="currentColor" />
+                                </button>
+                              </>
+                            ) : (role === 'author' || role === 'admin') ? (
+                              <>
+                                <Link
+                                  to={`/projects/edit/${project.id}`}
                                   className="btn btn--secondary"
                                   style={{
                                     flex: 1,
@@ -1361,6 +1439,8 @@ export default function ProfilePage() {
                   <h3 style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--color-ink-primary)', margin: '0 0 var(--space-1) 0' }}>
                     {projectTypeFilter !== 'all'
                       ? `No ${projectTypeFilter === 'Project' ? 'projects' : 'tutorials'} found`
+                      : projectStatusFilter === 'bookmarked'
+                      ? 'No Bookmarked Builds Yet'
                       : projectStatusFilter === 'draft'
                       ? 'No drafts found'
                       : projectStatusFilter === 'pending_approval'
@@ -1372,12 +1452,21 @@ export default function ProfilePage() {
                   <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-ink-secondary)', maxWidth: 420, margin: '0 auto', lineHeight: 1.5 }}>
                     {projectTypeFilter !== 'all'
                       ? `There are no ${projectTypeFilter.toLowerCase()}s under the selected filter criteria.`
+                      : projectStatusFilter === 'bookmarked'
+                      ? 'Projects and tutorials you bookmark across the platform will be collected here for quick reference and direct Web Serial flashing.'
                       : projectStatusFilter === 'draft'
                       ? 'Projects and tutorials saved as drafts will appear here with instant edit and preview access.'
                       : projectStatusFilter === 'pending_approval'
                       ? 'Submissions waiting for administrative verification will appear here.'
                       : 'Hardware projects, technical tutorials, and firmware builds created by this author will appear here.'}
                   </p>
+                  {projectStatusFilter === 'bookmarked' && (
+                    <div style={{ marginTop: 'var(--space-4)' }}>
+                      <Link to="/projects" className="btn btn--primary btn--sm">
+                        Explore Catalog & Bookmark Builds
+                      </Link>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

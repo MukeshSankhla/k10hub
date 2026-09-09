@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, ArrowDown } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import HeroBackground from './HeroBackground';
 
 // Lazy load the 3D model to avoid blocking initial page load
@@ -29,11 +29,6 @@ function ModelLoadingPlaceholder() {
 }
 
 export default function Hero() {
-  const handleScrollToContent = (e: React.MouseEvent) => {
-    e.preventDefault();
-    document.getElementById('learning-path')?.scrollIntoView({ behavior: 'smooth' });
-  };
-
   return (
     <section className="hero" aria-labelledby="hero-headline">
       {/* Precision Technical Engineering Square Grid */}
@@ -84,11 +79,11 @@ export default function Hero() {
 
           {/* CTAs */}
           <div className="hero__actions">
-            <Link to="/projects" className="btn btn--primary btn--lg" id="hero-cta-primary">
+            <Link to="/projects" className="btn btn--primary" id="hero-cta-primary">
               Explore Projects
-              <ArrowRight size={16} aria-hidden="true" />
+              <ArrowRight size={15} aria-hidden="true" />
             </Link>
-            <Link to="/learn" className="btn btn--secondary btn--lg" id="hero-cta-secondary">
+            <Link to="/learn" className="btn btn--secondary" id="hero-cta-secondary">
               Start Learning
             </Link>
           </div>
@@ -102,18 +97,6 @@ export default function Hero() {
         </div>
 
       </div>
-
-      {/* Down arrow scroll indicator to navigate down to the content */}
-      <a
-        href="#learning-path"
-        onClick={handleScrollToContent}
-        className="hero__scroll-indicator"
-        aria-label="Scroll down to content"
-        title="Scroll down for more content"
-      >
-        <span className="hero__scroll-indicator-text">SCROLL</span>
-        <ArrowDown size={14} className="hero__scroll-indicator-icon" aria-hidden="true" />
-      </a>
     </section>
   );
 }
