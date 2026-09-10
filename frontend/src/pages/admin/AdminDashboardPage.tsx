@@ -40,12 +40,37 @@ import {
   Github,
   Star,
   Zap,
+  Bell,
+  Megaphone,
+  Send,
+  Flame,
+  Gift,
+  Rocket,
+  Sparkles,
+  Trophy,
+  Heart,
+  MessageSquare,
+  Info,
+  AlertCircle,
 } from 'lucide-react';
 
 export default function AdminDashboardPage() {
   const { user, profile } = useAuth();
-  const [activeTab, setActiveTab] = useState<'users' | 'applications' | 'projects'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'applications' | 'projects' | 'notifications'>('users');
   const [stats, setStats] = useState<AdminStats | null>(null);
+
+  // Broadcast Notification State
+  const [broadcastTitle, setBroadcastTitle] = useState('');
+  const [broadcastMessage, setBroadcastMessage] = useState('');
+  const [broadcastUrl, setBroadcastUrl] = useState('');
+  const [broadcastIcon, setBroadcastIcon] = useState('bell');
+  const [broadcastTarget, setBroadcastTarget] = useState<'all' | 'users' | 'authors' | 'specific'>('all');
+  const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
+  const [broadcastLoading, setBroadcastLoading] = useState(false);
+  const [broadcastSuccessInfo, setBroadcastSuccessInfo] = useState<string | null>(null);
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [allUsersForSelect, setAllUsersForSelect] = useState<UserProfile[]>([]);
+  const [loadingAllUsers, setLoadingAllUsers] = useState(false);
 
   // Projects Verification & Moderation State
   const [projectsList, setProjectsList] = useState<ProjectDetail[]>(() => getAllProjects());
@@ -74,16 +99,28 @@ export default function AdminDashboardPage() {
     setExpandedAppIds((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  // Re-grant Author role to a demoted creator
-  const handleRestoreAuthor = async (userId: number) => {
-    try {
-      await api.admin.updateUserRole(userId, 'author');
-      setActionMessage({ type: 'success', text: `Author role successfully restored.` });
-      loadApplications();
-      loadStats();
-    } catch (err: any) {
-      setActionMessage({ type: 'error', text: err.message || 'Failed to restore Author role' });
-    }
+  // Re-grant Author role to a demoted creator with confirmation
+  const handleRestoreAuthor = (userId: number, userName?: string) => {
+    const targetName = userName || `User #${userId}`;
+    toast.confirm({
+      title: 'Confirm Author Reinstatement',
+      message: `Are you sure you want to reinstate Author role privileges for "${targetName}"?`,
+      confirmLabel: 'Reinstate Author',
+      cancelLabel: 'Cancel',
+      type: 'info',
+      onConfirm: async () => {
+        try {
+          await api.admin.updateUserRole(userId, 'author');
+          toast.success(`Author role successfully restored for ${targetName}.`);
+          setActionMessage({ type: 'success', text: `Author role successfully restored.` });
+          loadApplications();
+          loadStats();
+        } catch (err: any) {
+          toast.error(err.message || 'Failed to restore Author role');
+          setActionMessage({ type: 'error', text: err.message || 'Failed to restore Author role' });
+        }
+      },
+    });
   };
 
   // Helper to detect URLs in plain text and render them as interactive clickable links
@@ -244,24 +281,120 @@ export default function AdminDashboardPage() {
     }
   }, [stats]);
 
+  // Load all users for multi-user target picker
+  const loadAllUsersForPicker = useCallback(async () => {
+    setLoadingAllUsers(true);
+    try {
+      const res = await api.admin.getUsers({ page: 1, pageSize: 100 });
+      setAllUsersForSelect(res.data);
+    } catch (err) {
+      console.error('Failed to load users for notification target picker:', err);
+    } finally {
+      setLoadingAllUsers(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeTab === 'users') {
       loadUsers();
     } else if (activeTab === 'applications') {
       loadApplications();
+    } else if (activeTab === 'notifications' && allUsersForSelect.length === 0) {
+      loadAllUsersForPicker();
     }
-  }, [activeTab, loadUsers, loadApplications]);
+  }, [activeTab, loadUsers, loadApplications, allUsersForSelect.length, loadAllUsersForPicker]);
 
-  // Role update handler
-  const handleRoleChange = async (userId: number, newRole: UserRole) => {
-    try {
-      const res = await api.admin.updateUserRole(userId, newRole);
-      setActionMessage({ type: 'success', text: res.message });
-      loadUsers();
-      loadStats();
-    } catch (err: any) {
-      setActionMessage({ type: 'error', text: err.message || 'Failed to update user role' });
+  const handleSendBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!broadcastTitle.trim()) {
+      toast.error('Notification title is required');
+      return;
     }
+    if (!broadcastMessage.trim()) {
+      toast.error('Notification description/message is required');
+      return;
+    }
+    if (broadcastTarget === 'specific' && selectedUserIds.length === 0) {
+      toast.error('Please select at least one recipient user for custom delivery');
+      return;
+    }
+
+    setBroadcastLoading(true);
+    setBroadcastSuccessInfo(null);
+    try {
+      const res = await api.notifications.broadcast({
+        title: broadcastTitle.trim(),
+        message: broadcastMessage.trim(),
+        url: broadcastUrl.trim() || undefined,
+        icon: broadcastIcon,
+        target: broadcastTarget,
+        targetUserIds: broadcastTarget === 'specific' ? selectedUserIds : undefined,
+      });
+
+      toast.success(`Broadcast sent successfully to ${res.count} recipient(s)!`);
+      setBroadcastSuccessInfo(`Broadcast delivered to ${res.count} recipient(s) (${broadcastTarget.toUpperCase()}).`);
+      setBroadcastTitle('');
+      setBroadcastMessage('');
+      setBroadcastUrl('');
+      if (broadcastTarget === 'specific') {
+        setSelectedUserIds([]);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to dispatch broadcast notification');
+    } finally {
+      setBroadcastLoading(false);
+    }
+  };
+
+  const toggleSelectUser = (id: number) => {
+    setSelectedUserIds((prev) =>
+      prev.includes(id) ? prev.filter((userId) => userId !== id) : [...prev, id]
+    );
+  };
+
+  // Role update handler with confirmation dialog
+  const handleRoleChange = (
+    userId: number,
+    newRole: UserRole,
+    userName?: string,
+    currentRole?: UserRole
+  ) => {
+    if (newRole === currentRole) return;
+
+    const roleNames: Record<string, string> = {
+      admin: 'Administrator',
+      author: 'Author',
+      user: 'Standard Maker (User)',
+    };
+
+    const targetName = userName || `User #${userId}`;
+    const oldRoleName = currentRole ? roleNames[currentRole] || currentRole : 'current role';
+    const newRoleName = roleNames[newRole] || newRole;
+
+    toast.confirm({
+      title: 'Confirm User Role Change',
+      message: `Are you sure you want to change the role of "${targetName}" from ${oldRoleName} to ${newRoleName}?`,
+      confirmLabel: 'Change Role',
+      cancelLabel: 'Cancel',
+      type: newRole === 'admin' ? 'warning' : 'info',
+      onConfirm: async () => {
+        try {
+          const res = await api.admin.updateUserRole(userId, newRole);
+          toast.success(res.message || `Role updated to ${newRoleName}.`);
+          setActionMessage({ type: 'success', text: res.message });
+          loadUsers();
+          loadStats();
+        } catch (err: any) {
+          toast.error(err.message || 'Failed to update user role');
+          setActionMessage({ type: 'error', text: err.message || 'Failed to update user role' });
+          loadUsers();
+        }
+      },
+      onCancel: () => {
+        // Force refresh usersList state to keep the select input in sync with unchanged role
+        setUsersList((prev) => [...prev]);
+      },
+    });
   };
 
   // Status toggle handler
@@ -610,6 +743,25 @@ export default function AdminDashboardPage() {
                 </span>
               )}
             </button>
+
+            <button
+              onClick={() => setActiveTab('notifications')}
+              style={{
+                padding: 'var(--space-3) var(--space-5)',
+                fontSize: 'var(--text-sm)',
+                fontWeight: 600,
+                color: activeTab === 'notifications' ? 'var(--color-ink-primary)' : 'var(--color-ink-tertiary)',
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderBottom: activeTab === 'notifications' ? '2px solid var(--color-ink-primary)' : '2px solid transparent',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+              }}
+            >
+              <Megaphone size={16} /> Broadcast Notifications
+            </button>
           </div>
 
           {/* Tab 1: User Management */}
@@ -743,7 +895,7 @@ export default function AdminDashboardPage() {
                           <td style={{ padding: 'var(--space-3)' }}>
                             <select
                               value={u.role}
-                              onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole)}
+                              onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole, u.name, u.role)}
                               style={{
                                 padding: '4px 8px',
                                 borderRadius: 'var(--radius-md)',
@@ -1019,7 +1171,7 @@ export default function AdminDashboardPage() {
                           {isDemoted && app.user && (
                             <button
                               type="button"
-                              onClick={() => handleRestoreAuthor(app.user!.id)}
+                              onClick={() => handleRestoreAuthor(app.user!.id, app.user?.name)}
                               className="btn btn--primary btn--sm"
                               style={{ backgroundColor: 'rgb(37, 99, 235)', borderColor: 'rgb(37, 99, 235)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: 'var(--text-xs)' }}
                             >
@@ -1140,7 +1292,7 @@ export default function AdminDashboardPage() {
                               {app.user && (
                                 <button
                                   type="button"
-                                  onClick={() => handleRestoreAuthor(app.user!.id)}
+                                  onClick={() => handleRestoreAuthor(app.user!.id, app.user?.name)}
                                   className="btn btn--primary btn--sm"
                                   style={{ fontSize: '11px', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
                                 >
@@ -1535,6 +1687,611 @@ export default function AdminDashboardPage() {
                       ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+
+          {/* Tab 4: Broadcast Notifications Center */}
+          {activeTab === 'notifications' && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr)', gap: 'var(--space-6)', alignItems: 'start' }}>
+              {/* Left Column: Dispatch Form */}
+              <div style={{
+                backgroundColor: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-xl)',
+                padding: 'var(--space-6)',
+                boxShadow: 'var(--shadow-sm)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+                  <div style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 'var(--radius-lg)',
+                    backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#6366f1',
+                  }}>
+                    <Megaphone size={22} />
+                  </div>
+                  <div>
+                    <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, margin: 0, color: 'var(--color-ink-primary)' }}>
+                      Send Custom Notification
+                    </h2>
+                    <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', margin: '2px 0 0 0' }}>
+                      Deliver in-app push announcements directly to user notification trays
+                    </p>
+                  </div>
+                </div>
+
+                {broadcastSuccessInfo && (
+                  <div style={{
+                    padding: 'var(--space-3) var(--space-4)',
+                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    borderRadius: 'var(--radius-md)',
+                    color: '#059669',
+                    fontSize: 'var(--text-sm)',
+                    fontWeight: 600,
+                    marginBottom: 'var(--space-4)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)',
+                  }}>
+                    <CheckCircle2 size={16} /> {broadcastSuccessInfo}
+                  </div>
+                )}
+
+                <form onSubmit={handleSendBroadcast} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
+                  {/* Step 1: Audience Selection */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-2)' }}>
+                      1. Target Audience
+                    </label>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 'var(--space-2)' }}>
+                      {[
+                        { id: 'all', label: 'Send to All', desc: 'All registered accounts' },
+                        { id: 'users', label: 'Send to Users', desc: 'Standard users only' },
+                        { id: 'authors', label: 'Send to Authors', desc: 'Verified creators only' },
+                        { id: 'specific', label: 'Particular Users', desc: 'Multi-select specific users' },
+                      ].map((tgt) => (
+                        <button
+                          key={tgt.id}
+                          type="button"
+                          onClick={() => setBroadcastTarget(tgt.id as any)}
+                          style={{
+                            padding: 'var(--space-3)',
+                            borderRadius: 'var(--radius-lg)',
+                            border: `2px solid ${broadcastTarget === tgt.id ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                            backgroundColor: broadcastTarget === tgt.id ? 'rgba(99, 102, 241, 0.08)' : 'var(--color-paper)',
+                            color: broadcastTarget === tgt.id ? 'var(--color-accent)' : 'var(--color-ink-primary)',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, fontSize: 'var(--text-xs)' }}>{tgt.label}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--color-ink-tertiary)', marginTop: '2px' }}>{tgt.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Particular users picker */}
+                    {broadcastTarget === 'specific' && (
+                      <div style={{
+                        marginTop: 'var(--space-3)',
+                        padding: 'var(--space-3)',
+                        borderRadius: 'var(--radius-lg)',
+                        backgroundColor: 'var(--color-paper)',
+                        border: '1px solid var(--color-border)',
+                      }}>
+                        <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-2)', alignItems: 'center' }}>
+                          <div style={{ position: 'relative', flex: 1 }}>
+                            <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-ink-tertiary)' }} />
+                            <input
+                              type="text"
+                              value={userSearchQuery}
+                              onChange={(e) => setUserSearchQuery(e.target.value)}
+                              placeholder="Search users by name or email..."
+                              style={{
+                                width: '100%',
+                                paddingLeft: '32px',
+                                paddingRight: '10px',
+                                paddingTop: '6px',
+                                paddingBottom: '6px',
+                                fontSize: 'var(--text-xs)',
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid var(--color-border)',
+                                backgroundColor: 'var(--color-surface)',
+                                color: 'var(--color-ink-primary)',
+                                outline: 'none',
+                              }}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const filtered = allUsersForSelect.filter(
+                                (u) =>
+                                  (u.name && u.name.toLowerCase().includes(userSearchQuery.toLowerCase())) ||
+                                  u.email.toLowerCase().includes(userSearchQuery.toLowerCase())
+                              );
+                              setSelectedUserIds(Array.from(new Set([...selectedUserIds, ...filtered.map((u) => u.id)])));
+                            }}
+                            className="btn btn--secondary btn--sm"
+                            style={{ fontSize: '11px', padding: '5px 8px', whiteSpace: 'nowrap' }}
+                          >
+                            Select Filtered
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedUserIds([])}
+                            className="btn btn--ghost btn--sm"
+                            style={{ fontSize: '11px', padding: '5px 8px', whiteSpace: 'nowrap' }}
+                          >
+                            Clear
+                          </button>
+                        </div>
+
+                        <div style={{ fontSize: '11px', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-2)', display: 'flex', justifyContent: 'space-between' }}>
+                          <span>Select recipients:</span>
+                          <span style={{ fontWeight: 700, color: 'var(--color-accent)' }}>
+                            {selectedUserIds.length} user(s) selected
+                          </span>
+                        </div>
+
+                        <div style={{
+                          maxHeight: 180,
+                          overflowY: 'auto',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '4px',
+                          paddingRight: '4px',
+                        }}>
+                          {loadingAllUsers ? (
+                            <div style={{ padding: 'var(--space-3)', textAlign: 'center', fontSize: 'var(--text-xs)', color: 'var(--color-ink-tertiary)' }}>
+                              Loading users list...
+                            </div>
+                          ) : (
+                            allUsersForSelect
+                              .filter((u) => {
+                                if (!userSearchQuery) return true;
+                                const q = userSearchQuery.toLowerCase();
+                                return (
+                                  (u.name && u.name.toLowerCase().includes(q)) ||
+                                  u.email.toLowerCase().includes(q)
+                                );
+                              })
+                              .map((u) => {
+                                const isSelected = selectedUserIds.includes(u.id);
+                                return (
+                                  <label
+                                    key={u.id}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '8px',
+                                      padding: '5px 8px',
+                                      borderRadius: 'var(--radius-md)',
+                                      backgroundColor: isSelected ? 'rgba(99, 102, 241, 0.1)' : 'var(--color-surface)',
+                                      border: `1px solid ${isSelected ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                                      cursor: 'pointer',
+                                      fontSize: 'var(--text-xs)',
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={() => toggleSelectUser(u.id)}
+                                      style={{ cursor: 'pointer' }}
+                                    />
+                                    <div style={{
+                                      width: 20,
+                                      height: 20,
+                                      borderRadius: '50%',
+                                      backgroundColor: 'var(--color-accent)',
+                                      color: '#fff',
+                                      fontSize: '10px',
+                                      fontWeight: 700,
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      flexShrink: 0,
+                                    }}>
+                                      {u.name ? u.name[0].toUpperCase() : 'U'}
+                                    </div>
+                                    <span style={{ fontWeight: 600, color: 'var(--color-ink-primary)' }}>{u.name || u.email}</span>
+                                    <span style={{ color: 'var(--color-ink-tertiary)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                                      {u.email}
+                                    </span>
+                                    <span style={{
+                                      fontSize: '10px',
+                                      padding: '1px 5px',
+                                      borderRadius: 'var(--radius-full)',
+                                      backgroundColor: u.role === 'admin' ? 'rgba(239, 68, 68, 0.1)' : u.role === 'author' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(100, 116, 139, 0.1)',
+                                      color: u.role === 'admin' ? '#ef4444' : u.role === 'author' ? '#10b981' : 'var(--color-ink-tertiary)',
+                                      fontWeight: 700,
+                                      textTransform: 'uppercase',
+                                    }}>
+                                      {u.role}
+                                    </span>
+                                  </label>
+                                );
+                              })
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Step 2: Select Icon */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: 'var(--space-2)' }}>
+                      2. Notification Icon
+                    </label>
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(44px, 1fr))',
+                      gap: 'var(--space-2)',
+                      padding: 'var(--space-2)',
+                      backgroundColor: 'var(--color-paper)',
+                      borderRadius: 'var(--radius-lg)',
+                      border: '1px solid var(--color-border)',
+                    }}>
+                      {[
+                        { id: 'bell', label: 'Default Bell', Icon: Bell, color: '#6366f1' },
+                        { id: 'megaphone', label: 'Announcement', Icon: Megaphone, color: '#ec4899' },
+                        { id: 'rocket', label: 'Launch', Icon: Rocket, color: '#f59e0b' },
+                        { id: 'sparkles', label: 'Feature', Icon: Sparkles, color: '#8b5cf6' },
+                        { id: 'zap', label: 'Flash / Milestone', Icon: Zap, color: '#eab308' },
+                        { id: 'trophy', label: 'Trophy', Icon: Trophy, color: '#10b981' },
+                        { id: 'award', label: 'Award', Icon: Award, color: '#06b6d4' },
+                        { id: 'heart', label: 'Heart', Icon: Heart, color: '#ef4444' },
+                        { id: 'message-square', label: 'Community', Icon: MessageSquare, color: '#3b82f6' },
+                        { id: 'flame', label: 'Trending', Icon: Flame, color: '#f97316' },
+                        { id: 'star', label: 'Star', Icon: Star, color: '#eab308' },
+                        { id: 'gift', label: 'Gift', Icon: Gift, color: '#14b8a6' },
+                        { id: 'info', label: 'Info', Icon: Info, color: '#0ea5e9' },
+                        { id: 'alert-circle', label: 'Alert', Icon: AlertCircle, color: '#f43f5e' },
+                        { id: 'shield', label: 'Security', Icon: Shield, color: '#64748b' },
+                      ].map((item) => {
+                        const isSelected = broadcastIcon === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            title={item.label}
+                            onClick={() => setBroadcastIcon(item.id)}
+                            style={{
+                              width: '100%',
+                              aspectRatio: '1/1',
+                              borderRadius: 'var(--radius-md)',
+                              border: `2px solid ${isSelected ? item.color : 'transparent'}`,
+                              backgroundColor: isSelected ? 'rgba(99, 102, 241, 0.15)' : 'var(--color-surface)',
+                              color: item.color,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer',
+                              transform: isSelected ? 'scale(1.08)' : 'none',
+                              boxShadow: isSelected ? `0 0 10px ${item.color}40` : 'none',
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            <item.Icon size={20} />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Step 3: Notification Details */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: '4px' }}>
+                        3. Title *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={broadcastTitle}
+                        onChange={(e) => setBroadcastTitle(e.target.value)}
+                        placeholder="e.g. UNIHIKER K10 PlatformIO Firmware 2.0 Released!"
+                        style={{
+                          width: '100%',
+                          padding: '10px 12px',
+                          fontSize: 'var(--text-sm)',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--color-border)',
+                          backgroundColor: 'var(--color-paper)',
+                          color: 'var(--color-ink-primary)',
+                          outline: 'none',
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: '4px' }}>
+                        Short Description / Message *
+                      </label>
+                      <textarea
+                        required
+                        rows={3}
+                        value={broadcastMessage}
+                        onChange={(e) => setBroadcastMessage(e.target.value)}
+                        placeholder="Write a clear, engaging notification message that will appear in user inboxes..."
+                        style={{
+                          width: '100%',
+                          padding: '10px 12px',
+                          fontSize: 'var(--text-sm)',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--color-border)',
+                          backgroundColor: 'var(--color-paper)',
+                          color: 'var(--color-ink-primary)',
+                          outline: 'none',
+                          resize: 'vertical',
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)', marginBottom: '4px' }}>
+                        Target Destination URL (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={broadcastUrl}
+                        onChange={(e) => setBroadcastUrl(e.target.value)}
+                        placeholder="e.g. /project/12 or https://unihiker.com"
+                        style={{
+                          width: '100%',
+                          padding: '10px 12px',
+                          fontSize: 'var(--text-sm)',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--color-border)',
+                          backgroundColor: 'var(--color-paper)',
+                          color: 'var(--color-ink-primary)',
+                          outline: 'none',
+                        }}
+                      />
+                      <div style={{ fontSize: '11px', color: 'var(--color-ink-tertiary)', marginTop: '4px' }}>
+                        When users click on the notification item, they will be navigated to this destination.
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Submit Button */}
+                  <div style={{ paddingTop: 'var(--space-2)' }}>
+                    <button
+                      type="submit"
+                      disabled={broadcastLoading}
+                      className="btn btn--primary"
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 'var(--space-2)',
+                        padding: '12px',
+                        fontSize: 'var(--text-sm)',
+                        fontWeight: 700,
+                        backgroundColor: '#6366f1',
+                        borderColor: '#6366f1',
+                      }}
+                    >
+                      <Send size={16} />
+                      {broadcastLoading ? 'Dispatching Broadcast...' : 'Send Broadcast Notification'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              {/* Right Column: Live Preview & Delivery Overview */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+                {/* Live Preview Card */}
+                <div style={{
+                  backgroundColor: 'var(--color-surface)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-xl)',
+                  padding: 'var(--space-5)',
+                  boxShadow: 'var(--shadow-sm)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-3)' }}>
+                    <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-ink-secondary)' }}>
+                      In-App Notification Live Preview
+                    </span>
+                    <span style={{
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                      color: '#6366f1',
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-full)',
+                    }}>
+                      User View
+                    </span>
+                  </div>
+
+                  <div style={{
+                    backgroundColor: 'var(--color-paper)',
+                    borderRadius: 'var(--radius-lg)',
+                    border: '1px solid var(--color-border)',
+                    overflow: 'hidden',
+                  }}>
+                    {/* Simulated tray header */}
+                    <div style={{
+                      padding: '8px 12px',
+                      borderBottom: '1px solid var(--color-border)',
+                      fontSize: '11px',
+                      color: 'var(--color-ink-tertiary)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}>
+                      <span>Notifications Tray (Unread)</span>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#6366f1' }} />
+                    </div>
+
+                    {/* Notification item */}
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '12px',
+                      padding: '14px',
+                      backgroundColor: 'rgba(99, 102, 241, 0.04)',
+                    }}>
+                      {/* Icon */}
+                      <div style={{
+                        width: 36,
+                        height: 36,
+                        borderRadius: 'var(--radius-md)',
+                        backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#6366f1',
+                        flexShrink: 0,
+                      }}>
+                        {broadcastIcon === 'megaphone' && <Megaphone size={18} />}
+                        {broadcastIcon === 'rocket' && <Rocket size={18} />}
+                        {broadcastIcon === 'sparkles' && <Sparkles size={18} />}
+                        {broadcastIcon === 'zap' && <Zap size={18} />}
+                        {broadcastIcon === 'trophy' && <Trophy size={18} />}
+                        {broadcastIcon === 'award' && <Award size={18} />}
+                        {broadcastIcon === 'heart' && <Heart size={18} />}
+                        {broadcastIcon === 'message-square' && <MessageSquare size={18} />}
+                        {broadcastIcon === 'flame' && <Flame size={18} />}
+                        {broadcastIcon === 'star' && <Star size={18} />}
+                        {broadcastIcon === 'gift' && <Gift size={18} />}
+                        {broadcastIcon === 'info' && <Info size={18} />}
+                        {broadcastIcon === 'alert-circle' && <AlertCircle size={18} />}
+                        {broadcastIcon === 'shield' && <Shield size={18} />}
+                        {broadcastIcon === 'bell' && <Bell size={18} />}
+                      </div>
+
+                      {/* Content */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                          <span style={{
+                            fontSize: '13px',
+                            fontWeight: 700,
+                            color: 'var(--color-ink-primary)',
+                            lineHeight: 1.3,
+                          }}>
+                            {broadcastTitle || 'Notification Title Preview'}
+                          </span>
+                          <span style={{ fontSize: '11px', color: 'var(--color-ink-tertiary)', whiteSpace: 'nowrap' }}>
+                            Just now
+                          </span>
+                        </div>
+
+                        <p style={{
+                          fontSize: '12px',
+                          color: 'var(--color-ink-secondary)',
+                          lineHeight: 1.4,
+                          margin: '4px 0 0 0',
+                          wordBreak: 'break-word',
+                        }}>
+                          {broadcastMessage || 'Your message description will be rendered here just as the user sees it in their notification bell drawer.'}
+                        </p>
+
+                        {broadcastUrl && (
+                          <div style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            fontSize: '11px',
+                            color: 'var(--color-accent)',
+                            fontWeight: 600,
+                            marginTop: '6px',
+                          }}>
+                            <ExternalLink size={11} /> {broadcastUrl}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Delivery Target Details Card */}
+                <div style={{
+                  backgroundColor: 'var(--color-surface)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-xl)',
+                  padding: 'var(--space-5)',
+                  boxShadow: 'var(--shadow-sm)',
+                }}>
+                  <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 var(--space-3) 0', color: 'var(--color-ink-primary)' }}>
+                    Delivery Scope &amp; Info
+                  </h3>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', fontSize: 'var(--text-xs)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
+                      <span style={{ color: 'var(--color-ink-secondary)' }}>Target Audience:</span>
+                      <span style={{ fontWeight: 700, color: 'var(--color-ink-primary)', textTransform: 'uppercase' }}>
+                        {broadcastTarget === 'specific' ? `Particular Users (${selectedUserIds.length})` : broadcastTarget}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
+                      <span style={{ color: 'var(--color-ink-secondary)' }}>Delivery Medium:</span>
+                      <span style={{ fontWeight: 600, color: 'var(--color-ink-primary)' }}>In-App Bell &amp; Persistent DB</span>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
+                      <span style={{ color: 'var(--color-ink-secondary)' }}>Selected Icon:</span>
+                      <span style={{ fontWeight: 600, color: 'var(--color-ink-primary)', textTransform: 'capitalize' }}>
+                        {broadcastIcon}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
+                      <span style={{ color: 'var(--color-ink-secondary)' }}>Destination Click:</span>
+                      <span style={{ fontWeight: 600, color: broadcastUrl ? 'var(--color-accent)' : 'var(--color-ink-tertiary)' }}>
+                        {broadcastUrl ? 'Interactive URL Navigation' : 'Mark as Read'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* System Triggers Info */}
+                <div style={{
+                  backgroundColor: 'var(--color-surface)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-xl)',
+                  padding: 'var(--space-5)',
+                  boxShadow: 'var(--shadow-sm)',
+                }}>
+                  <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 var(--space-2) 0', color: 'var(--color-ink-primary)' }}>
+                    Automatic System Triggers Active
+                  </h3>
+                  <p style={{ fontSize: '11px', color: 'var(--color-ink-secondary)', margin: '0 0 var(--space-3) 0', lineHeight: 1.4 }}>
+                    In addition to manual admin broadcasts, the system automatically dispatches in-app notifications for:
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: 'var(--color-ink-primary)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Zap size={13} color="#eab308" />
+                      <span><strong>Flash Milestones:</strong> 10, 50, 100, 1000 complete flashes</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Heart size={13} color="#ef4444" />
+                      <span><strong>Project Engagement:</strong> Likes on user's projects</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <MessageSquare size={13} color="#3b82f6" />
+                      <span><strong>Comments &amp; Replies:</strong> New comments and looped thread replies</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Award size={13} color="#06b6d4" />
+                      <span><strong>Author Review:</strong> Application approval or rejection notes</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <CheckCircle2 size={13} color="#10b981" />
+                      <span><strong>Project Approvals:</strong> Moderation approvals for public showcase</span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}

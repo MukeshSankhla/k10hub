@@ -1,160 +1,148 @@
 // flashCountService.ts
-// Real-time flash count tracking with Firebase Firestore & localStorage caching.
+// Real-time flash count tracking directly connected to the K10 Hub SQLite backend database.
 
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import {
-  getFirestore,
-  doc,
-  getDoc,
-  setDoc,
-  increment,
-  onSnapshot,
-} from 'firebase/firestore';
+import { api } from '../api';
+import { updateProjectFlashCountInMemory } from '../projects/projectStorageService';
 
-const firebaseConfig = {
-  apiKey: 'AIzaSyAj8G4Y1uU0u4qDaWgmbQbzNlWi7BW-bqM',
-  authDomain: 'easyesp-79b42.firebaseapp.com',
-  projectId: 'easyesp-79b42',
-  storageBucket: 'easyesp-79b42.firebasestorage.app',
-  messagingSenderId: '281731498087',
-  appId: '1:281731498087:web:739cd274e19053849314c2',
-};
+const FLASH_EVENT = 'k10_flash_count_updated';
 
-let db: any = null;
-let isInitialized = false;
+// In-memory flash count cache for immediate zero-latency UI reads
+const inMemoryCounts = new Map<string, number>();
 
-try {
-  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-  db = getFirestore(app);
-  isInitialized = true;
-} catch (error) {
-  console.warn('Firebase flash count initialization warning (using local mode):', error);
-}
-
-// LocalStorage helpers for offline resilience
+/**
+ * Retrieves the currently known flash count synchronously from memory or storage.
+ */
 export function getLocalFlashCount(projectId: string): number {
-  try {
-    const stored = localStorage.getItem(`k10_flash_count_${projectId}`);
-    return stored ? parseInt(stored, 10) : 0;
-  } catch {
-    return 0;
-  }
-}
+  if (!projectId) return 0;
+  const cleanId = projectId.trim().toLowerCase();
 
-export function setLocalFlashCount(projectId: string, count: number): void {
+  if (inMemoryCounts.has(cleanId)) {
+    return inMemoryCounts.get(cleanId)!;
+  }
+
   try {
-    localStorage.setItem(`k10_flash_count_${projectId}`, count.toString());
-  } catch {}
+    const stored = localStorage.getItem(`k10_flash_count_${cleanId}`);
+    if (stored) {
+      const parsed = parseInt(stored, 10);
+      if (!isNaN(parsed)) {
+        inMemoryCounts.set(cleanId, parsed);
+        return parsed;
+      }
+    }
+  } catch {
+    // Ignore storage read error
+  }
+  return 0;
 }
 
 /**
- * Retrieves the current successful flash count for a specific project.
+ * Updates the flash count in memory, localStorage, and notifies listeners.
+ */
+export function setLocalFlashCount(projectId: string, count: number): void {
+  if (!projectId || typeof count !== 'number') return;
+  const cleanId = projectId.trim().toLowerCase();
+
+  inMemoryCounts.set(cleanId, count);
+
+  try {
+    localStorage.setItem(`k10_flash_count_${cleanId}`, String(count));
+  } catch {
+    // Ignore storage write error
+  }
+
+  // Update in-memory project detail so ProjectCard and ProjectDetailPage reflect immediately
+  updateProjectFlashCountInMemory(cleanId, count);
+
+  // Notify active listeners
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent(FLASH_EVENT, { detail: { projectId: cleanId, count } })
+    );
+  }
+}
+
+/**
+ * Retrieves the current verified flash count for a specific project directly from the backend DB.
  */
 export async function getProjectFlashCount(projectId: string): Promise<number> {
   if (!projectId) return 0;
-  const localVal = getLocalFlashCount(projectId);
-
-  if (!isInitialized || !db) {
-    return localVal;
-  }
+  const cleanId = projectId.trim().toLowerCase();
+  const current = getLocalFlashCount(cleanId);
 
   try {
-    const docRef = doc(db, 'project_stats', projectId);
-    const docSnap = await getDoc(docRef);
-
-    if (docSnap.exists()) {
-      const data = docSnap.data();
-      const count = typeof data.flashCount === 'number' ? data.flashCount : localVal;
-      setLocalFlashCount(projectId, count);
-      return count;
+    const res = await api.projects.get(cleanId);
+    if (res && res.data && typeof res.data.flashCount === 'number') {
+      const dbCount = res.data.flashCount;
+      setLocalFlashCount(cleanId, dbCount);
+      return dbCount;
     }
-    return localVal;
   } catch (error) {
-    console.warn(`Could not read Firestore flash count for ${projectId}:`, error);
-    return localVal;
+    // Silently fall back to cached count if network unavailable
   }
+
+  return current;
 }
 
 /**
- * Atomically increments the flash count for a project in Firestore & updates local cache.
+ * Atomically increments the flash count for a project in the backend SQLite DB.
  */
-export async function incrementProjectFlashCount(projectId: string, version = ''): Promise<number> {
+export async function incrementProjectFlashCount(projectId: string, _version = ''): Promise<number> {
   if (!projectId) return 0;
+  const cleanId = projectId.trim().toLowerCase();
 
-  // Optimistic local increment
-  const localCurrent = getLocalFlashCount(projectId);
-  const newLocalCount = localCurrent + 1;
-  setLocalFlashCount(projectId, newLocalCount);
-
-  if (!isInitialized || !db) {
-    return newLocalCount;
-  }
+  // Optimistic increment for instant UI feedback
+  const optimisticCount = getLocalFlashCount(cleanId) + 1;
+  setLocalFlashCount(cleanId, optimisticCount);
 
   try {
-    const docRef = doc(db, 'project_stats', projectId);
-
-    const updateData: Record<string, any> = {
-      projectId,
-      flashCount: increment(1),
-      lastFlashedAt: new Date().toISOString(),
-    };
-
-    if (version) {
-      const cleanVerKey = `version_${version.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-      updateData[cleanVerKey] = increment(1);
+    // Call backend API: POST /api/projects/:id/flash
+    const res = await api.projects.flash(cleanId);
+    if (res && typeof res.flashCount === 'number') {
+      setLocalFlashCount(cleanId, res.flashCount);
+      return res.flashCount;
     }
-
-    await setDoc(docRef, updateData, { merge: true });
-
-    const updatedSnap = await getDoc(docRef);
-    if (updatedSnap.exists()) {
-      const updatedCount = updatedSnap.data().flashCount || newLocalCount;
-      setLocalFlashCount(projectId, updatedCount);
-      return updatedCount;
-    }
-    return newLocalCount;
-  } catch (error) {
-    console.warn(`Could not increment Firestore flash count for ${projectId}:`, error);
-    return newLocalCount;
+  } catch (err) {
+    console.warn('Backend flash count increment sync notice:', err);
   }
+
+  return optimisticCount;
 }
 
 /**
- * Subscribes to real-time flash count updates for a project.
+ * Subscribes to flash count updates for a specific project.
  */
 export function subscribeProjectFlashCount(
   projectId: string,
   callback: (count: number) => void
 ): () => void {
   if (!projectId || typeof callback !== 'function') return () => {};
+  const cleanId = projectId.trim().toLowerCase();
 
-  // Immediate callback with cached local count
-  const initialLocal = getLocalFlashCount(projectId);
-  callback(initialLocal);
+  // Fire immediately with current value
+  callback(getLocalFlashCount(cleanId));
 
-  if (!isInitialized || !db) {
-    return () => {};
+  // Asynchronously query the DB to ensure latest count
+  getProjectFlashCount(cleanId).then((dbCount) => {
+    callback(dbCount);
+  }).catch(() => {});
+
+  const handleUpdate = (e: Event) => {
+    const customEvent = e as CustomEvent<{ projectId: string; count: number }>;
+    if (customEvent.detail && customEvent.detail.projectId === cleanId) {
+      callback(customEvent.detail.count);
+    }
+  };
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener(FLASH_EVENT, handleUpdate);
+    window.addEventListener('storage', () => {
+      callback(getLocalFlashCount(cleanId));
+    });
   }
 
-  try {
-    const docRef = doc(db, 'project_stats', projectId);
-    const unsubscribe = onSnapshot(
-      docRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const count = docSnap.data().flashCount || initialLocal;
-          setLocalFlashCount(projectId, count);
-          callback(count);
-        }
-      },
-      (err) => {
-        console.warn(`Firestore flash count subscription notice for ${projectId}:`, err);
-      }
-    );
-
-    return unsubscribe;
-  } catch (err) {
-    console.warn(`Error setting up Firestore subscription for ${projectId}:`, err);
-    return () => {};
-  }
+  return () => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener(FLASH_EVENT, handleUpdate);
+    }
+  };
 }

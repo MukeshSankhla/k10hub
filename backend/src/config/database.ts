@@ -5,8 +5,11 @@ import { env } from './env';
 import path from 'path';
 import fs from 'fs';
 
-// Resolve the database file path
-const dbPath = path.resolve(process.cwd(), env.DATABASE_URL);
+// Resolve the database file path reliably to backend directory
+const backendRootDir = path.resolve(__dirname, '../../');
+const dbPath = path.isAbsolute(env.DATABASE_URL)
+  ? env.DATABASE_URL
+  : path.resolve(backendRootDir, env.DATABASE_URL);
 const dbDir = path.dirname(dbPath);
 
 // Ensure the data directory exists

@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
 import { api, setAuthTokenGetter, UserProfile, AuthorApplication, UserRole, ProjectSummary } from '../services/api';
-import { syncCurrentUserProjects, syncAuthorProfileAcrossProjects } from '../services/projects/projectStorageService';
+import { syncCurrentUserProjects, syncAuthorProfileAcrossProjects, mergeBackendAuthorProjects } from '../services/projects/projectStorageService';
 
 interface AuthContextType {
   user: any | null;
@@ -38,6 +38,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setApplication(res.application);
       if (res.contributedProjects) {
         setContributedProjects(res.contributedProjects);
+        mergeBackendAuthorProjects(res.contributedProjects);
       }
       return { success: true, user: res.user };
     } catch (err: any) {
@@ -62,6 +63,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
 
     async function init() {
+      // Local development token support for automated tests & admin preview
+      const devToken = localStorage.getItem('k10_dev_token');
+      if (devToken && mounted) {
+        setUser({ id: 'dev-admin-uid-mukesh', email: 'mukeshdiy1@gmail.com', user_metadata: { name: 'Mukesh Admin' } });
+        setAuthTokenGetter(() => devToken);
+        await fetchBackendProfile(devToken);
+        setLoading(false);
+        return;
+      }
+
       if (!isSupabaseConfigured || !supabase) {
         setLoading(false);
         return;
@@ -232,6 +243,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (isSupabaseConfigured && supabase) {
         await supabase.auth.signOut();
       }
+      localStorage.removeItem('k10_dev_token');
       setUser(null);
       setProfile(null);
       setApplication(null);

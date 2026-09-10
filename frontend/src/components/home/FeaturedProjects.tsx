@@ -5,6 +5,7 @@ import { ProjectDetail } from '../../config/projectsData';
 import {
   getPublicProjects,
   subscribeProjects,
+  refreshProjectsFromBackend,
 } from '../../services/projects/projectStorageService';
 import ProjectCard from '../projects/ProjectCard';
 
@@ -13,6 +14,18 @@ export default function FeaturedProjects() {
 
   useEffect(() => {
     setProjects(getPublicProjects());
+
+    // Explicitly sync latest projects from backend SQLite database
+    refreshProjectsFromBackend().then((fresh) => {
+      if (fresh && fresh.length > 0) {
+        setProjects(
+          fresh.filter(
+            (p) => (p.status === 'published' || !p.status) && (p.visibility === 'public' || !p.visibility)
+          )
+        );
+      }
+    }).catch(() => {});
+
     const unsubscribe = subscribeProjects((updated) => {
       setProjects(updated.filter((p) => (p.status === 'published' || !p.status) && (p.visibility === 'public' || !p.visibility)));
     });

@@ -8,6 +8,7 @@ import {
   getPublicProjects,
   subscribeProjects,
   syncCurrentUserProjects,
+  refreshProjectsFromBackend,
 } from '../../services/projects/projectStorageService';
 import ProjectCard from '../../components/projects/ProjectCard';
 import {
@@ -78,6 +79,13 @@ export default function ProjectsGalleryPage() {
 
   useEffect(() => {
     setAllProjects(getPublicProjects());
+
+    refreshProjectsFromBackend().then((fresh) => {
+      if (fresh && fresh.length > 0) {
+        setAllProjects(getPublicProjects());
+      }
+    }).catch(() => {});
+
     const unsubscribe = subscribeProjects(() => {
       setAllProjects(getPublicProjects());
     });

@@ -1,96 +1,147 @@
 import { client } from '../config/database';
 
 export async function initDatabase(): Promise<void> {
-  // Create tables if they do not exist
+  // Drop legacy/unused tables
+  await client.execute('DROP TABLE IF EXISTS project_hardware');
+  await client.execute('DROP TABLE IF EXISTS project_libraries');
+  await client.execute('DROP TABLE IF EXISTS project_tags');
+  await client.execute('DROP TABLE IF EXISTS libraries');
+  await client.execute('DROP TABLE IF EXISTS tags');
+  await client.execute('DROP TABLE IF EXISTS categories');
+  await client.execute('DROP TABLE IF EXISTS authors');
+
+  // Check if projects table needs schema upgrade to string ID
+  try {
+    const tableInfo = await client.execute("PRAGMA table_info(projects)");
+    const hasStringId = tableInfo.rows.some((r: any) => r.name === 'id' && String(r.type).toUpperCase().includes('TEXT'));
+    if (!hasStringId) {
+      // Check if table is empty before dropping legacy schema
+      const rowCountRes = await client.execute("SELECT count(*) as count FROM projects");
+      const rowCount = Number(rowCountRes.rows[0]?.count || 0);
+      if (rowCount === 0) {
+        await client.execute("DROP TABLE IF EXISTS project_hardware");
+        await client.execute("DROP TABLE IF EXISTS project_libraries");
+        await client.execute("DROP TABLE IF EXISTS project_tags");
+        await client.execute("DROP TABLE IF EXISTS tutorials");
+        await client.execute("DROP TABLE IF EXISTS firmware_versions");
+        await client.execute("DROP TABLE IF EXISTS projects");
+      }
+    }
+  } catch {
+    // projects table might not exist yet
+  }
 
   await client.execute(`
-    CREATE TABLE IF NOT EXISTS authors (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
       slug TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      bio TEXT,
-      avatar_url TEXT,
-      github_url TEXT,
-      website_url TEXT,
+      title TEXT NOT NULL,
+      publish_date TEXT,
+      type TEXT NOT NULL DEFAULT 'Project',
+      level INTEGER NOT NULL DEFAULT 1,
+      author TEXT NOT NULL DEFAULT 'Maker',
+      author_avatar TEXT,
+      author_role TEXT DEFAULT 'author',
+      author_id TEXT,
+      author_email TEXT,
+      status TEXT NOT NULL DEFAULT 'published',
+      visibility TEXT NOT NULL DEFAULT 'public',
+      flash_count INTEGER NOT NULL DEFAULT 0,
+      like_count INTEGER NOT NULL DEFAULT 0,
+      view_count INTEGER NOT NULL DEFAULT 0,
+      featured INTEGER NOT NULL DEFAULT 0,
+      description TEXT NOT NULL,
+      cover_image TEXT NOT NULL,
+      doc_link TEXT,
+      github_link TEXT,
+      video_link TEXT,
+      project_md_file TEXT,
+      markdown_content TEXT,
+      compatible_board TEXT DEFAULT 'UNIHIKER K10',
+      license TEXT DEFAULT 'MIT',
+      tags TEXT,
+      firmwares TEXT,
       created_at INTEGER DEFAULT (unixepoch()),
       updated_at INTEGER DEFAULT (unixepoch())
     );
   `);
 
+  // Ensure project_md_file column exists on existing installations
+  try {
+    const tableInfo = await client.execute("PRAGMA table_info(projects)");
+    const hasProjectMdFile = tableInfo.rows.some((r: any) => r.name === 'project_md_file');
+    if (!hasProjectMdFile) {
+      await client.execute("ALTER TABLE projects ADD COLUMN project_md_file TEXT");
+      console.log('✅ Added missing project_md_file column to projects table.');
+    }
+  } catch (colErr) {
+    console.warn('Column check notice for project_md_file:', colErr);
+  }
+
+  // Ensure users table does not have dangling foreign key to dropped authors table
+  try {
+    const tableSqlRes = await client.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'");
+    const sql = String(tableSqlRes.rows[0]?.sql || '');
+    if (sql.includes('REFERENCES authors')) {
+      await client.execute('PRAGMA foreign_keys = OFF');
+      await client.execute("CREATE TABLE users_new (id INTEGER PRIMARY KEY AUTOINCREMENT, supabase_uid TEXT NOT NULL UNIQUE, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, avatar_url TEXT, bio TEXT, github_url TEXT, website_url TEXT, social_platform TEXT, social_url TEXT, instagram_url TEXT, youtube_url TEXT, linkedin_url TEXT, role TEXT NOT NULL DEFAULT 'user', status TEXT NOT NULL DEFAULT 'active', created_at INTEGER DEFAULT (unixepoch()), updated_at INTEGER DEFAULT (unixepoch()), last_sign_in_at INTEGER)");
+      await client.execute('INSERT INTO users_new SELECT id, supabase_uid, email, name, avatar_url, bio, github_url, website_url, social_platform, social_url, instagram_url, youtube_url, linkedin_url, role, status, created_at, updated_at, last_sign_in_at FROM users');
+      await client.execute('DROP TABLE users');
+      await client.execute('ALTER TABLE users_new RENAME TO users');
+      await client.execute('PRAGMA foreign_keys = ON');
+      console.log('✅ Cleaned up legacy authors foreign key on users table.');
+    }
+  } catch (userMigrateErr) {
+    console.warn('Users migration notice:', userMigrateErr);
+  }
+
   await client.execute(`
-    CREATE TABLE IF NOT EXISTS categories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      description TEXT,
-      icon_name TEXT,
-      color TEXT,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER DEFAULT (unixepoch())
+    CREATE TABLE IF NOT EXISTS comments (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      parent_id TEXT,
+      author_id TEXT NOT NULL,
+      author_name TEXT NOT NULL,
+      author_avatar TEXT,
+      author_email TEXT,
+      author_role TEXT DEFAULT 'user',
+      content TEXT NOT NULL,
+      score INTEGER NOT NULL DEFAULT 0,
+      upvoted_by TEXT DEFAULT '[]',
+      downvoted_by TEXT DEFAULT '[]',
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT
     );
   `);
 
   await client.execute(`
-    CREATE TABLE IF NOT EXISTS tags (
+    CREATE TABLE IF NOT EXISTS project_likes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      created_at INTEGER DEFAULT (unixepoch())
-    );
-  `);
-
-  await client.execute(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT NOT NULL UNIQUE,
-      title TEXT NOT NULL,
-      short_description TEXT NOT NULL,
-      description TEXT NOT NULL,
-      category_id INTEGER REFERENCES categories(id),
-      author_id INTEGER REFERENCES authors(id),
-      difficulty TEXT NOT NULL DEFAULT 'beginner',
-      estimated_minutes INTEGER,
-      is_published INTEGER NOT NULL DEFAULT 0,
-      is_featured INTEGER NOT NULL DEFAULT 0,
-      is_community INTEGER NOT NULL DEFAULT 0,
-      is_official INTEGER NOT NULL DEFAULT 1,
-      cover_image_url TEXT,
-      video_url TEXT,
-      github_url TEXT,
-      example_code TEXT,
-      firmware_url TEXT,
-      platformio_config TEXT,
-      view_count INTEGER NOT NULL DEFAULT 0,
-      like_count INTEGER NOT NULL DEFAULT 0,
-      flash_count INTEGER NOT NULL DEFAULT 0,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
+      user_email TEXT,
       created_at INTEGER DEFAULT (unixepoch()),
-      updated_at INTEGER DEFAULT (unixepoch()),
-      published_at INTEGER
+      UNIQUE(project_id, user_id)
     );
   `);
 
   await client.execute(`
-    CREATE TABLE IF NOT EXISTS project_hardware (
+    CREATE TABLE IF NOT EXISTS project_bookmarks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL REFERENCES projects(id),
-      name TEXT NOT NULL,
-      quantity INTEGER NOT NULL DEFAULT 1,
-      is_required INTEGER NOT NULL DEFAULT 1,
-      purchase_url TEXT,
-      notes TEXT
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
+      created_at INTEGER DEFAULT (unixepoch()),
+      UNIQUE(project_id, user_id)
     );
   `);
 
   await client.execute(`
-    CREATE TABLE IF NOT EXISTS libraries (
+    CREATE TABLE IF NOT EXISTS flash_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      version TEXT,
-      description TEXT,
-      repository_url TEXT,
-      platformio_lib_id TEXT,
-      created_at INTEGER DEFAULT (unixepoch())
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id TEXT,
+      flashed_at INTEGER DEFAULT (unixepoch())
     );
   `);
 
@@ -111,7 +162,6 @@ export async function initDatabase(): Promise<void> {
       linkedin_url TEXT,
       role TEXT NOT NULL DEFAULT 'user',
       status TEXT NOT NULL DEFAULT 'active',
-      author_id INTEGER REFERENCES authors(id),
       created_at INTEGER DEFAULT (unixepoch()),
       updated_at INTEGER DEFAULT (unixepoch()),
       last_sign_in_at INTEGER
@@ -135,6 +185,21 @@ export async function initDatabase(): Promise<void> {
     );
   `);
 
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      icon TEXT NOT NULL DEFAULT 'bell',
+      url TEXT,
+      is_read INTEGER NOT NULL DEFAULT 0,
+      data TEXT,
+      created_at INTEGER DEFAULT (unixepoch())
+    );
+  `);
+
   // ─── Safe migrations for existing tables ────────────────────────────────────
   const userColumns = [
     'bio TEXT',
@@ -150,22 +215,6 @@ export async function initDatabase(): Promise<void> {
   for (const col of userColumns) {
     try {
       await client.execute(`ALTER TABLE users ADD COLUMN ${col}`);
-    } catch {
-      // Column already exists
-    }
-  }
-
-  const authorColumns = [
-    'social_platform TEXT',
-    'social_url TEXT',
-    'instagram_url TEXT',
-    'youtube_url TEXT',
-    'linkedin_url TEXT',
-  ];
-
-  for (const col of authorColumns) {
-    try {
-      await client.execute(`ALTER TABLE authors ADD COLUMN ${col}`);
     } catch {
       // Column already exists
     }

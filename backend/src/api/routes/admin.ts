@@ -2,9 +2,10 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { eq, desc, and, like, or, sql, count } from 'drizzle-orm';
 import { db } from '../../config/database';
-import { users, authorApplications, authors, projects } from '../../db/schema';
+import { users, authorApplications, projects } from '../../db/schema';
 import { requireAdmin, AuthRequest } from '../../middleware/auth';
 import { env } from '../../config/env';
+import { notificationService } from '../../services/NotificationService';
 
 const router = Router();
 
@@ -95,9 +96,6 @@ router.get('/users', async (req: AuthRequest, res: Response) => {
       limit: pageSize,
       offset,
       orderBy: [desc(users.createdAt)],
-      with: {
-        author: true,
-      },
     });
 
     const totalResult = await db
@@ -170,46 +168,16 @@ router.patch('/users/:id/role', async (req: AuthRequest, res: Response) => {
 
     const now = Math.floor(Date.now() / 1000);
 
-    // If upgrading to author and doesn't have an author profile yet, create one!
-    let authorId = targetUser.authorId;
-    if (newRole === 'author' && !authorId) {
-      const baseSlug = targetUser.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `creator-${targetUser.id}`;
-      let finalSlug = baseSlug;
-      
-      const existingSlug = await db.query.authors.findFirst({
-        where: eq(authors.slug, finalSlug),
-      });
-      if (existingSlug) {
-        finalSlug = `${baseSlug}-${Date.now().toString().slice(-4)}`;
-      }
-
-      const [newAuthor] = await db
-        .insert(authors)
-        .values({
-          slug: finalSlug,
-          name: targetUser.name,
-          bio: 'Verified UNIHIKER K10 Creator',
-          avatarUrl: targetUser.avatarUrl,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning();
-
-      authorId = newAuthor.id;
-    }
-
     await db
       .update(users)
       .set({
         role: newRole,
-        authorId: authorId || null,
         updatedAt: now,
       })
       .where(eq(users.id, targetUserId));
 
     const updated = await db.query.users.findFirst({
       where: eq(users.id, targetUserId),
-      with: { author: true },
     });
 
     return res.json({
@@ -363,38 +331,11 @@ router.post('/author-applications/:id/approve', async (req: AuthRequest, res: Re
     const applicant = appRecord.user;
     const now = Math.floor(Date.now() / 1000);
 
-    // Create author profile if applicant does not have one
-    let authorId = applicant.authorId;
-    if (!authorId) {
-      const baseSlug = applicant.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `creator-${applicant.id}`;
-      let finalSlug = baseSlug;
-      const existing = await db.query.authors.findFirst({ where: eq(authors.slug, finalSlug) });
-      if (existing) {
-        finalSlug = `${baseSlug}-${Date.now().toString().slice(-4)}`;
-      }
-
-      const [newAuthor] = await db
-        .insert(authors)
-        .values({
-          slug: finalSlug,
-          name: applicant.name,
-          bio: appRecord.bio,
-          avatarUrl: applicant.avatarUrl,
-          githubUrl: appRecord.githubUrl,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning();
-
-      authorId = newAuthor.id;
-    }
-
     // Update user role to author
     await db
       .update(users)
       .set({
         role: 'author',
-        authorId,
         updatedAt: now,
       })
       .where(eq(users.id, applicant.id));
@@ -409,6 +350,8 @@ router.post('/author-applications/:id/approve', async (req: AuthRequest, res: Re
         updatedAt: now,
       })
       .where(eq(authorApplications.id, applicationId));
+
+    notificationService.notifyAuthorApplication(applicationId, 'approved').catch(() => {});
 
     return res.json({
       success: true,
@@ -452,6 +395,8 @@ router.post('/author-applications/:id/reject', async (req: AuthRequest, res: Res
         updatedAt: now,
       })
       .where(eq(authorApplications.id, applicationId));
+
+    notificationService.notifyAuthorApplication(applicationId, 'rejected', adminNotes).catch(() => {});
 
     return res.json({
       success: true,

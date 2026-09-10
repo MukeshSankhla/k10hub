@@ -70,7 +70,7 @@ export default function ProjectEditorModal({
       releaseDate: formatCurrentPublishDate(),
       firmwareUrl: '',
       flashAddress: '0x00',
-      versionNote: 'Initial release build for UNIHIKER K10.',
+      versionNote: '',
     },
   ]);
 
@@ -275,6 +275,7 @@ export default function ProjectEditorModal({
         docLink: docLink.trim() || undefined,
         license: license.trim() || 'MIT',
         tags: combinedTags.length > 0 ? combinedTags : ['UNIHIKER K10'],
+        projectMdFile: activeInitial?.projectMdFile || null,
         markdownContent: markdownContent.trim() || `# ${title}\n\n${description}`,
         firmwares: firmwares.filter((f) => f.name.trim() || f.version.trim()),
       };

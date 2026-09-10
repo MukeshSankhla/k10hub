@@ -87,6 +87,19 @@ export interface ApiItemResponse<T> {
   data: T;
 }
 
+export interface AppNotification {
+  id: number;
+  userId: number;
+  type: string;
+  title: string;
+  message: string;
+  icon: string;
+  url: string | null;
+  isRead: boolean;
+  data?: string | null;
+  createdAt: number;
+}
+
 // ─── User & Role types ────────────────────────────────────────────────────────
 export type UserRole = 'unknown' | 'user' | 'author' | 'admin';
 export type UserStatus = 'active' | 'suspended';
@@ -155,18 +168,94 @@ export interface AdminStats {
 // ─── API Functions ────────────────────────────────────────────────────────────
 export const api = {
   projects: {
-    list: (params?: { page?: number; pageSize?: number; category?: string; difficulty?: string; featured?: boolean }) => {
+    list: (params?: {
+      page?: number;
+      pageSize?: number;
+      type?: string;
+      difficulty?: number;
+      featured?: boolean;
+      status?: string;
+      visibility?: string;
+      authorId?: string;
+      search?: string;
+      tag?: string;
+    }) => {
       const query = new URLSearchParams();
       if (params?.page) query.set('page', String(params.page));
       if (params?.pageSize) query.set('pageSize', String(params.pageSize));
-      if (params?.category) query.set('category', params.category);
-      if (params?.difficulty) query.set('difficulty', params.difficulty);
+      if (params?.type) query.set('type', params.type);
+      if (params?.difficulty !== undefined) query.set('difficulty', String(params.difficulty));
       if (params?.featured !== undefined) query.set('featured', String(params.featured));
+      if (params?.status) query.set('status', params.status);
+      if (params?.visibility) query.set('visibility', params.visibility);
+      if (params?.authorId) query.set('authorId', params.authorId);
+      if (params?.search) query.set('search', params.search);
+      if (params?.tag) query.set('tag', params.tag);
       const qs = query.toString();
-      return request<ApiListResponse<ProjectSummary>>(`/projects${qs ? `?${qs}` : ''}`);
+      return request<ApiListResponse<any>>(`/projects${qs ? `?${qs}` : ''}`);
     },
-    get: (slug: string) => request<ApiItemResponse<ProjectSummary>>(`/projects/${slug}`),
-    featured: () => request<ApiItemResponse<ProjectSummary[]>>('/projects/featured'),
+    get: (id: string) => request<{ data: any }>(`/projects/${encodeURIComponent(id)}`),
+    featured: () => request<{ data: any[] }>('/projects/featured'),
+    save: (payload: any) =>
+      request<{ success: boolean; data: any }>('/projects', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    create: (payload: any) =>
+      request<{ success: boolean; data: any }>('/projects', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    update: (id: string, payload: any) =>
+      request<{ success: boolean; data: any }>(`/projects/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    delete: (id: string) =>
+      request<{ success: boolean; id: string }>(`/projects/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      }),
+    flash: (id: string) =>
+      request<{ success: boolean; flashCount: number }>(`/projects/${encodeURIComponent(id)}/flash`, {
+        method: 'POST',
+      }),
+    toggleFeatured: (id: string) =>
+      request<{ success: boolean; isFeatured: boolean }>(`/projects/${encodeURIComponent(id)}/feature`, {
+        method: 'POST',
+      }),
+  },
+  community: {
+    getLikes: (projectId: string) =>
+      request<{ count: number; isLiked: boolean }>(`/community/likes/${encodeURIComponent(projectId)}`),
+    toggleLike: (projectId: string) =>
+      request<{ count: number; isLiked: boolean }>(`/community/likes/${encodeURIComponent(projectId)}/toggle`, {
+        method: 'POST',
+      }),
+    getBookmarks: () =>
+      request<{ bookmarks: string[] }>('/community/bookmarks'),
+    toggleBookmark: (projectId: string) =>
+      request<{ isBookmarked: boolean; projectId: string }>(`/community/bookmarks/${encodeURIComponent(projectId)}/toggle`, {
+        method: 'POST',
+      }),
+    getComments: (projectId: string) =>
+      request<{ comments: any[] }>(`/community/comments/${encodeURIComponent(projectId)}`),
+    addComment: (projectId: string, payload: { content: string; parentId?: string | null }) =>
+      request<{ success: boolean; comment: any }>(`/community/comments/${encodeURIComponent(projectId)}`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    voteComment: (commentId: string, voteType: 'up' | 'down' | 'none') =>
+      request<{ id: string; score: number; upvotedBy: string[]; downvotedBy: string[] }>(
+        `/community/comments/${encodeURIComponent(commentId)}/vote`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ voteType }),
+        }
+      ),
+    deleteComment: (commentId: string) =>
+      request<{ success: boolean; id: string }>(`/community/comments/${encodeURIComponent(commentId)}`, {
+        method: 'DELETE',
+      }),
   },
   categories: {
     list: () => request<ApiListResponse<Category>>('/categories'),
@@ -246,6 +335,41 @@ export const api = {
       request<{ success: boolean; message: string }>(`/admin/author-applications/${id}/reject`, {
         method: 'POST',
         body: JSON.stringify({ adminNotes }),
+      }),
+  },
+  notifications: {
+    list: (params?: { limit?: number; offset?: number }) => {
+      const query = new URLSearchParams();
+      if (params?.limit) query.set('limit', String(params.limit));
+      if (params?.offset) query.set('offset', String(params.offset));
+      const qs = query.toString();
+      return request<{ data: AppNotification[]; unreadCount: number }>(`/notifications${qs ? `?${qs}` : ''}`);
+    },
+    unreadCount: () =>
+      request<{ unreadCount: number }>('/notifications/unread-count'),
+    markAsRead: (id: number) =>
+      request<{ success: boolean }>(`/notifications/${id}/read`, {
+        method: 'POST',
+      }),
+    markAllAsRead: () =>
+      request<{ success: boolean }>('/notifications/read-all', {
+        method: 'POST',
+      }),
+    delete: (id: number) =>
+      request<{ success: boolean }>(`/notifications/${id}`, {
+        method: 'DELETE',
+      }),
+    broadcast: (payload: {
+      icon?: string;
+      title: string;
+      message: string;
+      url?: string;
+      target: 'all' | 'users' | 'authors' | 'specific';
+      targetUserIds?: number[];
+    }) =>
+      request<{ success: boolean; count: number; message: string }>('/notifications/broadcast', {
+        method: 'POST',
+        body: JSON.stringify(payload),
       }),
   },
   health: () => request<{ status: string; service: string; version: string }>('/health'),

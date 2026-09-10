@@ -4,10 +4,11 @@ import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
 import { useAuth } from '../../contexts/AuthContext';
 import { toast } from '../../contexts/ToastContext';
+import { api } from '../../services/api';
 import { ProjectDetail, FirmwareConfig, AVAILABLE_TOPICS } from '../../config/projectsData';
 import {
   getProjectById,
-  saveProject,
+  saveProjectAsync,
   formatCurrentPublishDate,
   parseVideoEmbedUrl,
   isProjectAuthor,
@@ -85,7 +86,7 @@ export default function ProjectEditorPage() {
       releaseDate: formatCurrentPublishDate(),
       firmwareUrl: '',
       flashAddress: '0x0000',
-      versionNote: 'Initial release build for UNIHIKER K10.',
+      versionNote: '',
     },
   ]);
 
@@ -109,52 +110,79 @@ export default function ProjectEditorPage() {
 
   // Load project if in editing mode and verify author permissions
   useEffect(() => {
+    let isMounted = true;
+
+    const populateFromProject = (existing: ProjectDetail) => {
+      setExistingProject(existing);
+      const authorized = (role === 'author' || role === 'admin') && isProjectAuthor(existing, user, profile);
+      setHasEditPermission(authorized);
+
+      if (authorized) {
+        setTitle(existing.title || '');
+        setSlugId(existing.id || '');
+        setSlugTouched(true);
+        setType((existing.type as 'Project' | 'Tutorial') || 'Project');
+        setLevel(existing.level || 2);
+        setDescription(existing.description || '');
+        setCoverImage(existing.coverImage || '');
+        setVideoLink(existing.videoLink || '');
+        setProjectMdFile(existing.projectMdFile || '');
+        setGithubLink(existing.githubLink || '');
+        setDocLink(existing.docLink || '');
+        setLicense(existing.license || 'MIT');
+        if (existing.tags && Array.isArray(existing.tags)) {
+          const matchedTopics = existing.tags.filter((t) => AVAILABLE_TOPICS.includes(t as any));
+          const otherTags = existing.tags.filter((t) => !AVAILABLE_TOPICS.includes(t as any));
+          setSelectedTopics(matchedTopics);
+          setCustomTagsInput(otherTags.join(', '));
+        } else {
+          setSelectedTopics([]);
+          setCustomTagsInput('');
+        }
+        setPublishDate(existing.publishDate || '');
+        setStatus(existing.status || 'published');
+        setFlashCount(existing.flashCount || 0);
+        if (existing.firmwares && existing.firmwares.length > 0) {
+          setFirmwares(existing.firmwares);
+        }
+      } else {
+        setFormError('Permission denied: Only the original author has permission to edit this project or tutorial.');
+      }
+    };
+
     if (isEditing && paramId) {
       const existing = getProjectById(paramId);
       if (existing) {
-        setExistingProject(existing);
-        const authorized = (role === 'author' || role === 'admin') && isProjectAuthor(existing, user, profile);
-        setHasEditPermission(authorized);
-
-        if (authorized) {
-          setTitle(existing.title || '');
-          setSlugId(existing.id || '');
-          setSlugTouched(true);
-          setType((existing.type as 'Project' | 'Tutorial') || 'Project');
-          setLevel(existing.level || 2);
-          setDescription(existing.description || '');
-          setCoverImage(existing.coverImage || '');
-          setVideoLink(existing.videoLink || '');
-          setProjectMdFile(existing.projectMdFile || '');
-          setGithubLink(existing.githubLink || '');
-          setDocLink(existing.docLink || '');
-          setLicense(existing.license || 'MIT');
-          if (existing.tags && Array.isArray(existing.tags)) {
-            const matchedTopics = existing.tags.filter((t) => AVAILABLE_TOPICS.includes(t as any));
-            const otherTags = existing.tags.filter((t) => !AVAILABLE_TOPICS.includes(t as any));
-            setSelectedTopics(matchedTopics);
-            setCustomTagsInput(otherTags.join(', '));
-          } else {
-            setSelectedTopics([]);
-            setCustomTagsInput('');
-          }
-          setPublishDate(existing.publishDate || '');
-          setStatus(existing.status || 'published');
-          setFlashCount(existing.flashCount || 0);
-          if (existing.firmwares && existing.firmwares.length > 0) {
-            setFirmwares(existing.firmwares);
-          }
-        }
+        populateFromProject(existing);
       } else {
-        setExistingProject(null);
-        setHasEditPermission(false);
-        setFormError(`Project with ID "${paramId}" was not found.`);
+        // Fallback: Fetch directly from backend API
+        api.projects.get(paramId)
+          .then((res) => {
+            if (!isMounted) return;
+            if (res && res.data) {
+              populateFromProject(res.data);
+            } else {
+              setExistingProject(null);
+              setHasEditPermission(false);
+              setFormError(`Project with ID "${paramId}" was not found.`);
+            }
+          })
+          .catch(() => {
+            if (!isMounted) return;
+            setExistingProject(null);
+            setHasEditPermission(false);
+            setFormError(`Project with ID "${paramId}" was not found.`);
+          });
       }
     } else {
       const canCreate = role === 'author' || role === 'admin';
       setHasEditPermission(canCreate);
       setStatus('draft');
     }
+
+    return () => {
+      isMounted = false;
+    };
   }, [isEditing, paramId, user, profile, role]);
 
   // Test fetch remote .md file for live preview
@@ -221,7 +249,7 @@ export default function ProjectEditorPage() {
   };
 
   // Submit Handler
-  const handleSave = (targetStatus?: 'draft' | 'pending_approval' | 'published') => {
+  const handleSave = async (targetStatus?: 'draft' | 'pending_approval' | 'published') => {
     setFormError('');
     setFieldErrors({});
 
@@ -338,7 +366,7 @@ export default function ProjectEditorPage() {
         firmwares: stampedFirmwares,
       };
 
-      saveProject(projectToSave);
+      await saveProjectAsync(projectToSave);
       setIsSaving(false);
 
       if (nextStatus === 'pending_approval') {

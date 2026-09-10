@@ -71,15 +71,18 @@ export default function ProjectDetailPage() {
   const [flashCount, setFlashCount] = useState<number>(() => currentProject?.flashCount || 0);
   const [copiedLink, setCopiedLink] = useState(false);
 
+  const uid = user?.id ? String(user.id) : undefined;
+  const altUid = profile?.id ? String(profile.id) : undefined;
+
   // Community state (Likes, Bookmarks, Comments)
   const [likeCount, setLikeCount] = useState<number>(() =>
     id ? getProjectLikeCount(id) : 0
   );
   const [isLiked, setIsLiked] = useState<boolean>(() =>
-    id ? isProjectLiked(id, user?.id || profile?.id) : false
+    id ? isProjectLiked(id, uid || altUid) : false
   );
   const [isBookmarked, setIsBookmarked] = useState<boolean>(() =>
-    id ? isProjectBookmarked(id, user?.id || profile?.id) : false
+    id ? isProjectBookmarked(id, uid, altUid) : false
   );
   const [commentCount, setCommentCount] = useState<number>(() =>
     id ? getProjectCommentCount(id) : 0
@@ -90,14 +93,14 @@ export default function ProjectDetailPage() {
     if (!id) return;
     const updateStats = () => {
       setLikeCount(getProjectLikeCount(id));
-      setIsLiked(isProjectLiked(id, user?.id || profile?.id));
-      setIsBookmarked(isProjectBookmarked(id, user?.id || profile?.id));
+      setIsLiked(isProjectLiked(id, uid || altUid));
+      setIsBookmarked(isProjectBookmarked(id, uid, altUid));
       setCommentCount(getProjectCommentCount(id));
     };
     updateStats();
-    const unsub = subscribeCommunity(updateStats);
-    return unsub;
-  }, [id, user?.id, profile?.id]);
+    const unsubCommunity = subscribeCommunity(updateStats);
+    return () => unsubCommunity();
+  }, [id, uid, altUid]);
 
   // Subscribe to real-time Firestore flash count
   useEffect(() => {
@@ -181,13 +184,14 @@ export default function ProjectDetailPage() {
 
   const handleToggleBookmark = () => {
     if (!currentProject) return;
-    const currentUserId = user?.id || profile?.id;
-    if (!currentUserId) {
+    const currentUserId = user?.id ? String(user.id) : (profile?.id ? String(profile.id) : undefined);
+    const altUserId = profile?.id ? String(profile.id) : undefined;
+    if (!currentUserId && !altUserId) {
       toast.warning('Please sign in to bookmark projects.', 'Sign In Required');
       return;
     }
     try {
-      const bookmarked = toggleProjectBookmark(currentProject.id, String(currentUserId));
+      const bookmarked = toggleProjectBookmark(currentProject.id, currentUserId, altUserId);
       setIsBookmarked(bookmarked);
       if (bookmarked) {
         toast.success('Project bookmarked! View it anytime in your Profile.', 'Saved to Bookmarks');

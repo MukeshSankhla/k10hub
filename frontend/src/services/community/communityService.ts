@@ -1,9 +1,10 @@
 // communityService.ts
 // Handles Likes, Reddit-style Nested Comments, and Bookmarks for UNIHIKER K10 Projects & Tutorials.
-// STRICTLY RESTRICTED TO LOGGED-IN PROFILES ONLY.
+// Integrated with backend database API with local resilience caching.
 
 import { ProjectDetail } from '../../config/projectsData';
 import { getAllProjects } from '../projects/projectStorageService';
+import { api } from '../api';
 
 export interface ProjectComment {
   id: string;
@@ -27,18 +28,6 @@ const BOOKMARKS_KEY = 'k10_community_bookmarks_v2';
 const COMMENTS_KEY = 'k10_community_comments_v2';
 const COMMUNITY_EVENT = 'k10_community_updated';
 
-// Clean up any legacy guest/visitor cache
-try {
-  if (typeof window !== 'undefined' && window.localStorage) {
-    localStorage.removeItem('k10_visitor_id');
-    localStorage.removeItem('k10_community_likes_v1');
-    localStorage.removeItem('k10_community_bookmarks_v1');
-    localStorage.removeItem('k10_community_comments_v1');
-  }
-} catch (e) {
-  // Ignore localStorage errors
-}
-
 function dispatchCommunityUpdate() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(COMMUNITY_EVENT));
@@ -58,7 +47,6 @@ export function subscribeCommunity(callback: () => void): () => void {
 
 // ─── LIKES ─────────────────────────────────────────────────────────────────────
 
-// Map of projectId -> array of user IDs who liked it
 function getLikesMap(): Record<string, string[]> {
   try {
     const raw = localStorage.getItem(LIKES_KEY);
@@ -92,6 +80,31 @@ export function isProjectLiked(projectId: string, userId?: string): boolean {
   return list.some((id) => id.toLowerCase() === uid);
 }
 
+export async function fetchProjectLikesFromDb(projectId: string, userId?: string): Promise<{ count: number; isLiked: boolean }> {
+  if (!projectId) return { count: 0, isLiked: false };
+  try {
+    const res = await api.community.getLikes(projectId);
+    if (res) {
+      const map = getLikesMap();
+      const key = projectId.toLowerCase();
+      if (res.isLiked && userId) {
+        const list = map[key] || [];
+        if (!list.includes(String(userId).toLowerCase())) {
+          map[key] = [...list, String(userId).toLowerCase()];
+          saveLikesMap(map);
+        }
+      }
+      return { count: res.count, isLiked: res.isLiked };
+    }
+  } catch (err) {
+    // Fail gracefully to cache
+  }
+  return {
+    count: getProjectLikeCount(projectId),
+    isLiked: isProjectLiked(projectId, userId),
+  };
+}
+
 export function toggleProjectLike(projectId: string, userId?: string, fallbackBase = 0): { liked: boolean; count: number } {
   if (!userId) {
     throw new Error('Please sign in to like projects and tutorials.');
@@ -114,12 +127,21 @@ export function toggleProjectLike(projectId: string, userId?: string, fallbackBa
   map[key] = list;
   saveLikesMap(map);
   const count = Math.max(list.length, fallbackBase);
+
+  // Sync with DB
+  api.community.toggleLike(projectId).then((res) => {
+    if (res && typeof res.count === 'number') {
+      // Sync confirmed count
+    }
+  }).catch((err) => {
+    console.warn('Backend like sync notice:', err);
+  });
+
   return { liked, count };
 }
 
 // ─── BOOKMARKS ─────────────────────────────────────────────────────────────────
 
-// Map of userId -> array of projectIds
 function getBookmarksMap(): Record<string, string[]> {
   try {
     const raw = localStorage.getItem(BOOKMARKS_KEY);
@@ -138,52 +160,119 @@ function saveBookmarksMap(map: Record<string, string[]>): void {
   }
 }
 
-export function isProjectBookmarked(projectId: string, userId?: string): boolean {
-  if (!projectId || !userId) return false;
-  const uid = String(userId).trim().toLowerCase();
+export function isProjectBookmarked(projectId: string, userId?: string, altUserId?: string): boolean {
+  if (!projectId || (!userId && !altUserId)) return false;
   const map = getBookmarksMap();
-  const userBookmarks = map[uid] || [];
-  return userBookmarks.some((id) => id.toLowerCase() === projectId.toLowerCase());
+  const cleanId = projectId.toLowerCase();
+  const keys = [
+    userId ? String(userId).trim().toLowerCase() : null,
+    altUserId ? String(altUserId).trim().toLowerCase() : null,
+  ].filter(Boolean) as string[];
+
+  for (const k of keys) {
+    const list = map[k] || [];
+    if (list.some((id) => id.toLowerCase() === cleanId)) {
+      return true;
+    }
+  }
+  return false;
 }
 
-export function toggleProjectBookmark(projectId: string, userId?: string): boolean {
-  if (!userId) {
+export async function fetchUserBookmarksFromDb(userId?: string, altUserId?: string): Promise<string[]> {
+  if (!userId && !altUserId) return [];
+  try {
+    const res = await api.community.getBookmarks();
+    if (res && Array.isArray(res.bookmarks)) {
+      const cleanBookmarks = res.bookmarks.map((b: string) => b.toLowerCase());
+      const map = getBookmarksMap();
+      if (userId) {
+        map[String(userId).trim().toLowerCase()] = cleanBookmarks;
+      }
+      if (altUserId) {
+        map[String(altUserId).trim().toLowerCase()] = cleanBookmarks;
+      }
+      saveBookmarksMap(map);
+      return res.bookmarks;
+    }
+  } catch (err) {
+    // Fail gracefully to cache
+  }
+  return getUserBookmarkedProjectIds(userId, altUserId);
+}
+
+export function toggleProjectBookmark(projectId: string, userId?: string, altUserId?: string): boolean {
+  if (!userId && !altUserId) {
     throw new Error('Please sign in to bookmark projects and tutorials.');
   }
   if (!projectId) return false;
-  const uid = String(userId).trim().toLowerCase();
   const map = getBookmarksMap();
-  let userBookmarks = map[uid] || [];
   const cleanId = projectId.toLowerCase();
+  const keys = [
+    userId ? String(userId).trim().toLowerCase() : null,
+    altUserId ? String(altUserId).trim().toLowerCase() : null,
+  ].filter(Boolean) as string[];
 
-  let bookmarked = false;
-  if (userBookmarks.some((id) => id.toLowerCase() === cleanId)) {
-    userBookmarks = userBookmarks.filter((id) => id.toLowerCase() !== cleanId);
-    bookmarked = false;
-  } else {
-    userBookmarks = [cleanId, ...userBookmarks];
-    bookmarked = true;
+  let isCurrentlyBookmarked = false;
+  for (const k of keys) {
+    if ((map[k] || []).some((id) => id.toLowerCase() === cleanId)) {
+      isCurrentlyBookmarked = true;
+      break;
+    }
   }
 
-  map[uid] = userBookmarks;
+  const willBeBookmarked = !isCurrentlyBookmarked;
+
+  for (const k of keys) {
+    let userBookmarks = map[k] || [];
+    if (willBeBookmarked) {
+      if (!userBookmarks.some((id) => id.toLowerCase() === cleanId)) {
+        userBookmarks = [cleanId, ...userBookmarks];
+      }
+    } else {
+      userBookmarks = userBookmarks.filter((id) => id.toLowerCase() !== cleanId);
+    }
+    map[k] = userBookmarks;
+  }
+
   saveBookmarksMap(map);
-  return bookmarked;
+
+  // Sync with DB
+  api.community.toggleBookmark(projectId).catch((err) => {
+    console.warn('Backend bookmark sync notice:', err);
+  });
+
+  return willBeBookmarked;
 }
 
-export function getUserBookmarkedProjectIds(userId?: string): string[] {
-  if (!userId) return [];
-  const uid = String(userId).trim().toLowerCase();
+export function getUserBookmarkedProjectIds(userId?: string, altUserId?: string): string[] {
+  if (!userId && !altUserId) return [];
   const map = getBookmarksMap();
-  return map[uid] || [];
+  const ids = new Set<string>();
+
+  if (userId) {
+    const uid = String(userId).trim().toLowerCase();
+    const list = map[uid] || [];
+    list.forEach((id) => ids.add(id.toLowerCase()));
+  }
+  if (altUserId) {
+    const altUid = String(altUserId).trim().toLowerCase();
+    const list = map[altUid] || [];
+    list.forEach((id) => ids.add(id.toLowerCase()));
+  }
+
+  return Array.from(ids);
 }
 
-export function getUserBookmarkedProjects(userId?: string): ProjectDetail[] {
-  const ids = getUserBookmarkedProjectIds(userId);
+export function getUserBookmarkedProjects(userId?: string, altUserId?: string): ProjectDetail[] {
+  const ids = getUserBookmarkedProjectIds(userId, altUserId);
   if (!ids.length) return [];
   const all = getAllProjects();
   const mapById = new Map<string, ProjectDetail>();
   for (const p of all) {
     mapById.set(p.id.toLowerCase(), p);
+    if ((p as any).slug) {
+      mapById.set(String((p as any).slug).toLowerCase(), p);
+    }
   }
   const result: ProjectDetail[] = [];
   for (const id of ids) {
@@ -219,12 +308,52 @@ export function getProjectComments(projectId: string): ProjectComment[] {
   if (!projectId) return [];
   const all = getAllStoredComments();
   const cleanId = projectId.toLowerCase();
-  return all.filter((c) => c.projectId.toLowerCase() === cleanId);
+  const cached = all.filter((c) => c.projectId.toLowerCase() === cleanId);
+
+  // Asynchronously trigger refresh from backend DB
+  refreshCommentsFromDb(projectId).catch(() => {});
+  return cached;
+}
+
+export async function refreshCommentsFromDb(projectId: string): Promise<ProjectComment[]> {
+  if (!projectId) return [];
+  try {
+    const res = await api.community.getComments(projectId);
+    if (res && Array.isArray(res.comments)) {
+      const dbComments: ProjectComment[] = res.comments.map((c: any) => ({
+        id: c.id,
+        projectId: c.projectId.toLowerCase(),
+        parentId: c.parentId || null,
+        authorName: c.authorName || 'Maker',
+        authorEmail: c.authorEmail,
+        authorAvatar: c.authorAvatar,
+        authorRole: c.authorRole || 'user',
+        authorId: String(c.authorId),
+        content: c.content,
+        createdAt: c.createdAt,
+        score: Number(c.score) || 0,
+        upvotedBy: Array.isArray(c.upvotedBy) ? c.upvotedBy : [],
+        downvotedBy: Array.isArray(c.downvotedBy) ? c.downvotedBy : [],
+        isDeleted: Boolean(c.isDeleted),
+      }));
+
+      const all = getAllStoredComments();
+      const cleanId = projectId.toLowerCase();
+      const otherComments = all.filter((c) => c.projectId.toLowerCase() !== cleanId);
+      const updated = [...dbComments, ...otherComments];
+      saveAllComments(updated);
+      return dbComments;
+    }
+  } catch (err) {
+    // Keep local cache on network error
+  }
+  const all = getAllStoredComments();
+  return all.filter((c) => c.projectId.toLowerCase() === projectId.toLowerCase());
 }
 
 export function getProjectCommentCount(projectId: string): number {
   if (!projectId) return 0;
-  const list = getProjectComments(projectId);
+  const list = getAllStoredComments().filter((c) => c.projectId.toLowerCase() === projectId.toLowerCase());
   return list.filter((c) => !c.isDeleted).length;
 }
 
@@ -272,6 +401,17 @@ export function addComment(
 
   all.unshift(newComment);
   saveAllComments(all);
+
+  // Sync to database
+  api.community.addComment(projectId, { content: cleanContent, parentId }).then((res) => {
+    if (res && res.comment) {
+      // Re-sync with backend ID
+      refreshCommentsFromDb(projectId).catch(() => {});
+    }
+  }).catch((err) => {
+    console.warn('Backend comment post notice:', err);
+  });
+
   return newComment;
 }
 
@@ -292,29 +432,37 @@ export function voteComment(
   const hasUpvoted = comment.upvotedBy.some((id) => id.toLowerCase() === uid);
   const hasDownvoted = comment.downvotedBy.some((id) => id.toLowerCase() === uid);
 
+  let voteType: 'up' | 'down' | 'none' = 'none';
+
   if (type === 'up') {
     if (hasUpvoted) {
-      // Remove upvote
       comment.upvotedBy = comment.upvotedBy.filter((id) => id.toLowerCase() !== uid);
+      voteType = 'none';
     } else {
-      // Add upvote, remove downvote if any
       comment.upvotedBy = [...comment.upvotedBy, uid];
       comment.downvotedBy = comment.downvotedBy.filter((id) => id.toLowerCase() !== uid);
+      voteType = 'up';
     }
   } else {
     if (hasDownvoted) {
-      // Remove downvote
       comment.downvotedBy = comment.downvotedBy.filter((id) => id.toLowerCase() !== uid);
+      voteType = 'none';
     } else {
-      // Add downvote, remove upvote if any
       comment.downvotedBy = [...comment.downvotedBy, uid];
       comment.upvotedBy = comment.upvotedBy.filter((id) => id.toLowerCase() !== uid);
+      voteType = 'down';
     }
   }
 
   comment.score = comment.upvotedBy.length - comment.downvotedBy.length;
   all[idx] = comment;
   saveAllComments(all);
+
+  // Sync with DB
+  api.community.voteComment(commentId, voteType).catch((err) => {
+    console.warn('Backend comment vote notice:', err);
+  });
+
   return comment;
 }
 
@@ -324,7 +472,6 @@ export function deleteComment(commentId: string, _userIdentifier?: string): bool
   if (idx < 0) return false;
 
   const comment = all[idx];
-  // Check if comment has replies; if it has replies, soft delete to preserve thread structure
   const hasReplies = all.some((c) => c.parentId === commentId);
 
   if (hasReplies) {
@@ -338,6 +485,12 @@ export function deleteComment(commentId: string, _userIdentifier?: string): bool
   }
 
   saveAllComments(all);
+
+  // Sync with DB
+  api.community.deleteComment(commentId).catch((err) => {
+    console.warn('Backend comment delete notice:', err);
+  });
+
   return true;
 }
 
@@ -370,3 +523,4 @@ export function buildCommentTree(comments: ProjectComment[]): CommentTreeNode[] 
 
   return roots;
 }
+

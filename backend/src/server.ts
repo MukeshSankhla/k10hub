@@ -12,6 +12,8 @@ import projectRoutes from './api/routes/projects';
 import categoryRoutes from './api/routes/categories';
 import authRoutes from './api/routes/auth';
 import adminRoutes from './api/routes/admin';
+import communityRoutes from './api/routes/community';
+import notificationRoutes from './api/routes/notifications';
 
 import rateLimit from 'express-rate-limit';
 
@@ -28,10 +30,14 @@ app.use(cors({ origin: corsOrigins, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 
-// General API Rate Limiting (600 requests per 15 min per IP)
+// General API Rate Limiting (skipped in development for localhost testing)
+const isDev = env.NODE_ENV === 'development';
+const isLocalhost = (ip?: string) => !ip || ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 600,
+  max: isDev ? 50000 : 1200,
+  skip: (req) => isDev || isLocalhost(req.ip),
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -41,10 +47,11 @@ const globalLimiter = rateLimit({
 });
 app.use('/api', globalLimiter);
 
-// Strict Rate Limiting on Authentication Endpoints (60 requests per 15 min per IP)
+// Authentication Rate Limiting
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 60,
+  max: isDev ? 10000 : 120,
+  skip: (req) => isDev || isLocalhost(req.ip),
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -59,6 +66,8 @@ app.use('/api/projects', projectRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/community', communityRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Static frontend build serving (production / single-server mode)
 const frontendDist = path.resolve(__dirname, '../../frontend/dist');

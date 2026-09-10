@@ -1,54 +1,135 @@
-// projectStorageService.ts
-// Client-side persistence and CRUD management for UNIHIKER K10 projects and tutorials.
-
 import { ProjectDetail } from '../../config/projectsData';
+import { api } from '../api';
 
 const STORAGE_KEY = 'k10_projects_store_v3';
 const UPDATE_EVENT = 'k10_projects_updated';
 
-// Self-executing cleanup to wipe legacy dummy projects and old cached data across browser sessions
-try {
-  if (typeof window !== 'undefined' && window.localStorage) {
-    localStorage.removeItem('k10_projects_store_v2');
-    localStorage.removeItem('k10_projects_store_v1');
-    localStorage.removeItem('k10_projects_store');
-    localStorage.removeItem('k10_authors_profile_cache');
-    localStorage.removeItem('k10_flash_counts');
+// In-memory cache for instant synchronous access across React components
+let memoryProjectsCache: ProjectDetail[] = [];
+let hasFetchedFromBackend = false;
+let isFetchingBackend = false;
+
+// Initialize cache from localStorage if available, then immediately sync from backend API
+function initializeMemoryCache(): ProjectDetail[] {
+  if (memoryProjectsCache.length > 0) return memoryProjectsCache;
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          memoryProjectsCache = parsed;
+        }
+      }
+    }
+  } catch (e) {
+    // Ignore initial parse errors
   }
-} catch (e) {
-  // Ignore storage access errors
+  return memoryProjectsCache;
+}
+
+// Initialize on module load
+initializeMemoryCache();
+
+/**
+ * Fetches the latest projects directly from the backend database
+ * and updates the cache and localStorage.
+ */
+export async function refreshProjectsFromBackend(retryCount = 0): Promise<ProjectDetail[]> {
+  if (isFetchingBackend) return memoryProjectsCache;
+  isFetchingBackend = true;
+  try {
+    const res = await api.projects.list({ pageSize: 100 });
+    if (res && Array.isArray(res.data)) {
+      const dbProjects: ProjectDetail[] = res.data.map((p: any) => ({
+        id: p.id || p.slug,
+        title: p.title || 'Untitled Project',
+        publishDate: p.publishDate || '',
+        type: p.type || 'Project',
+        level: Number(p.level) || 1,
+        author: p.author || 'Maker',
+        authorAvatar: p.authorAvatar || '',
+        authorRole: p.authorRole || 'author',
+        authorId: p.authorId || '',
+        authorEmail: p.authorEmail || '',
+        status: p.status || 'published',
+        visibility: p.visibility || 'public',
+        flashCount: Number(p.flashCount) || 0,
+        featured: Boolean(p.featured ?? p.isFeatured),
+        isFeatured: Boolean(p.featured ?? p.isFeatured),
+        description: p.description || '',
+        coverImage: p.coverImage || '',
+        docLink: p.docLink || '',
+        githubLink: p.githubLink || '',
+        videoLink: p.videoLink || '',
+        projectMdFile: p.projectMdFile || null,
+        markdownContent: p.markdownContent || '',
+        compatibleBoard: p.compatibleBoard || 'UNIHIKER K10',
+        license: p.license || 'MIT',
+        tags: Array.isArray(p.tags) ? p.tags : [],
+        firmwares: Array.isArray(p.firmwares) ? p.firmwares : [],
+      }));
+
+      // Merge with any locally stored unapproved projects (drafts or pending_approval)
+      // so local or in-flight author submissions are not prematurely dropped
+      const mergedMap = new Map<string, ProjectDetail>();
+      for (const p of dbProjects) {
+        mergedMap.set(p.id.toLowerCase(), p);
+      }
+      for (const localP of memoryProjectsCache) {
+        if (!mergedMap.has(localP.id.toLowerCase()) && (localP.status === 'draft' || localP.status === 'pending_approval')) {
+          mergedMap.set(localP.id.toLowerCase(), localP);
+        }
+      }
+      const finalProjects = Array.from(mergedMap.values());
+
+      memoryProjectsCache = finalProjects;
+      hasFetchedFromBackend = true;
+
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(finalProjects));
+        }
+      } catch {}
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(UPDATE_EVENT));
+      }
+      return finalProjects;
+    }
+  } catch (err) {
+    console.warn('Backend projects sync notice (using cached data):', err);
+    // If backend was unreachable and cache is empty, retry shortly (e.g. dev server starting)
+    if (retryCount < 3 && memoryProjectsCache.length === 0) {
+      setTimeout(() => {
+        refreshProjectsFromBackend(retryCount + 1).catch(() => {});
+      }, 1500 * (retryCount + 1));
+    }
+  } finally {
+    isFetchingBackend = false;
+  }
+  return memoryProjectsCache;
+}
+
+// Trigger background refresh on app load and window focus
+if (typeof window !== 'undefined') {
+  setTimeout(() => {
+    refreshProjectsFromBackend().catch(() => {});
+  }, 10);
+
+  window.addEventListener('focus', () => {
+    refreshProjectsFromBackend().catch(() => {});
+  });
 }
 
 /**
  * Normalizes an array of projects, ensuring defaults and integrity.
  */
 function getStoredProjects(): ProjectDetail[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
-      return [];
-    }
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      // Clean up any legacy dummy sample projects if present
-      const filtered = parsed.filter(
-        (p) =>
-          p &&
-          p.id &&
-          p.id !== 'esp32-p4-display' &&
-          !p.title?.toLowerCase().includes('getting started with unihiker')
-      );
-      if (filtered.length !== parsed.length) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
-      }
-      return filtered;
-    }
-    return [];
-  } catch (err) {
-    console.warn('Could not parse stored projects:', err);
-    return [];
+  if (memoryProjectsCache.length === 0 && !hasFetchedFromBackend) {
+    initializeMemoryCache();
   }
+  return memoryProjectsCache;
 }
 
 /**
@@ -56,6 +137,7 @@ function getStoredProjects(): ProjectDetail[] {
  */
 export function clearAllProjectStorage(): void {
   try {
+    memoryProjectsCache = [];
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem('k10_projects_store_v2');
     localStorage.removeItem('k10_projects_store_v1');
@@ -288,18 +370,15 @@ export function syncAuthorProfileAcrossProjects(
     const pEmail = (project.authorEmail || '').trim().toLowerCase();
     const pName = (project.author || '').trim().toLowerCase();
 
-    // Match if IDs match
     const matchId = Boolean(targetId && pId && pId === targetId);
-    // Match if Emails match
     const matchEmail = Boolean(targetEmail && pEmail && pEmail === targetEmail);
-    // Match if Names match
     const matchName = Boolean(
       targetName && pName && (pName === targetName || pName.includes(targetName) || targetName.includes(pName))
     );
 
     if (matchId || matchEmail || matchName) {
       modifiedCount++;
-      return {
+      const updatedP: ProjectDetail = {
         ...project,
         author: updates.name !== undefined && updates.name.trim() ? updates.name.trim() : project.author,
         authorAvatar: updates.avatarUrl !== undefined ? updates.avatarUrl : project.authorAvatar,
@@ -307,6 +386,9 @@ export function syncAuthorProfileAcrossProjects(
         authorId: targetId ? String(authorIdentifier.id) : project.authorId,
         authorEmail: updates.email || authorIdentifier.email || project.authorEmail,
       };
+      // Asynchronously update in DB
+      api.projects.update(project.id, updatedP).catch(() => {});
+      return updatedP;
     }
 
     return project;
@@ -316,7 +398,6 @@ export function syncAuthorProfileAcrossProjects(
     persistProjects(updatedProjects);
   }
 
-  // Update known author cache
   saveKnownAuthor({
     id: targetId || undefined,
     email: targetEmail || undefined,
@@ -363,7 +444,7 @@ export function syncCurrentUserProjects(currentUser?: any, currentProfile?: any)
 
       if (needsUpdate) {
         modifiedCount++;
-        return {
+        const updatedP = {
           ...project,
           author: userName || project.author,
           authorAvatar: userAvatar || project.authorAvatar,
@@ -371,6 +452,8 @@ export function syncCurrentUserProjects(currentUser?: any, currentProfile?: any)
           authorId: userId || project.authorId,
           authorEmail: userEmail || project.authorEmail,
         };
+        api.projects.update(project.id, updatedP).catch(() => {});
+        return updatedP;
       }
     }
     return project;
@@ -392,11 +475,73 @@ export function syncCurrentUserProjects(currentUser?: any, currentProfile?: any)
 }
 
 function persistProjects(projects: ProjectDetail[]): void {
+  memoryProjectsCache = projects;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
-    window.dispatchEvent(new CustomEvent(UPDATE_EVENT));
+    if (typeof window !== 'undefined' && window.localStorage) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(UPDATE_EVENT));
+    }
   } catch (err) {
-    console.error('Failed to save projects to localStorage:', err);
+    console.error('Failed to update local project state:', err);
+  }
+}
+
+/**
+ * Merges projects returned by /api/auth/me (contributedProjects) into the active project store.
+ */
+export function mergeBackendAuthorProjects(authorProjects: any[]): void {
+  if (!Array.isArray(authorProjects) || authorProjects.length === 0) return;
+
+  const all = [...getStoredProjects()];
+  let changed = false;
+
+  for (const raw of authorProjects) {
+    const id = String(raw.id || raw.slug || '').toLowerCase();
+    if (!id) continue;
+
+    const existingIdx = all.findIndex((p) => p.id.toLowerCase() === id);
+    const normalized: ProjectDetail = {
+      id: raw.id || raw.slug,
+      title: raw.title || 'Untitled Project',
+      publishDate: raw.publishDate || '',
+      type: raw.type || 'Project',
+      level: Number(raw.level) || 1,
+      author: raw.author || 'Maker',
+      authorAvatar: raw.authorAvatar || '',
+      authorRole: raw.authorRole || 'author',
+      authorId: raw.authorId || '',
+      authorEmail: raw.authorEmail || '',
+      status: raw.status || 'published',
+      visibility: raw.visibility || 'public',
+      flashCount: Number(raw.flashCount) || 0,
+      featured: Boolean(raw.featured ?? raw.isFeatured),
+      isFeatured: Boolean(raw.featured ?? raw.isFeatured),
+      description: raw.description || raw.shortDescription || '',
+      coverImage: raw.coverImage || raw.coverImageUrl || '',
+      docLink: raw.docLink || '',
+      githubLink: raw.githubLink || '',
+      videoLink: raw.videoLink || '',
+      projectMdFile: raw.projectMdFile || null,
+      markdownContent: raw.markdownContent || '',
+      compatibleBoard: raw.compatibleBoard || 'UNIHIKER K10',
+      license: raw.license || 'MIT',
+      tags: Array.isArray(raw.tags) ? raw.tags : [],
+      firmwares: Array.isArray(raw.firmwares) ? raw.firmwares : [],
+    };
+
+    if (existingIdx >= 0) {
+      all[existingIdx] = { ...all[existingIdx], ...normalized };
+      changed = true;
+    } else {
+      all.unshift(normalized);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    persistProjects(all);
   }
 }
 
@@ -441,7 +586,12 @@ export function getProjectById(id: string): ProjectDetail | undefined {
   if (!id) return undefined;
   const cleanId = id.trim().toLowerCase();
   const all = getStoredProjects();
-  return all.find((p) => p.id.toLowerCase() === cleanId);
+  const found = all.find((p) => p.id.toLowerCase() === cleanId);
+  if (!found) {
+    // If not found in memory cache, kick off background refresh
+    refreshProjectsFromBackend().catch(() => {});
+  }
+  return found;
 }
 
 /**
@@ -477,11 +627,77 @@ export function formatCurrentPublishDate(input?: Date | string | number): string
 }
 
 /**
- * Creates or updates a project/tutorial.
+ * Creates or updates a project/tutorial in both memory cache and backend database.
  * Automatically stamps publishDate and firmware releaseDate.
  */
+export async function saveProjectAsync(project: ProjectDetail): Promise<ProjectDetail> {
+  const currentDate = formatCurrentPublishDate();
+
+  const firmwares = Array.isArray(project.firmwares) && project.firmwares.length > 0
+    ? project.firmwares.map(f => ({
+        ...f,
+        releaseDate: f.releaseDate && f.releaseDate.trim() ? f.releaseDate : currentDate,
+      }))
+    : [
+        {
+          version: 'v1.0.0',
+          name: `${project.title} Default Build`,
+          releaseDate: currentDate,
+          firmwareUrl: '',
+          flashAddress: '0x00',
+          versionNote: '',
+        }
+      ];
+
+  const toSave: ProjectDetail = {
+    ...project,
+    status: project.status || 'draft',
+    visibility: project.visibility || (project.status === 'published' ? 'public' : 'draft'),
+    publishDate: project.publishDate || (project.status === 'published' ? currentDate : ''),
+    coverImage: normalizeImageUrl(project.coverImage) || project.coverImage,
+    projectMdFile: normalizeMarkdownUrl(project.projectMdFile) || null,
+    license: project.license || 'MIT',
+    flashCount: typeof project.flashCount === 'number' ? project.flashCount : 0,
+    featured: Boolean(project.featured ?? project.isFeatured ?? false),
+    isFeatured: Boolean(project.featured ?? project.isFeatured ?? false),
+    firmwares,
+  };
+
+  // Optimistically update memory and storage
+  const all = [...getStoredProjects()];
+  const existingIdx = all.findIndex((p) => p.id.toLowerCase() === toSave.id.toLowerCase());
+  if (existingIdx >= 0) {
+    all[existingIdx] = toSave;
+  } else {
+    all.unshift(toSave);
+  }
+  persistProjects(all);
+
+  // Persist directly to backend database
+  try {
+    const res = await api.projects.save(toSave);
+    if (res && res.data) {
+      const persisted = { ...toSave, ...res.data };
+      const currentAll = [...memoryProjectsCache];
+      const idx = currentAll.findIndex((p) => p.id.toLowerCase() === toSave.id.toLowerCase());
+      if (idx >= 0) {
+        currentAll[idx] = persisted;
+      }
+      persistProjects(currentAll);
+      return persisted;
+    }
+  } catch (err) {
+    console.error('Failed to persist project to backend DB:', err);
+  }
+
+  return toSave;
+}
+
+/**
+ * Synchronous wrapper for saveProject to maintain complete backward compatibility.
+ */
 export function saveProject(project: ProjectDetail): ProjectDetail {
-  const all = getStoredProjects();
+  const all = [...getStoredProjects()];
   const existingIdx = all.findIndex((p) => p.id.toLowerCase() === project.id.toLowerCase());
   const currentDate = formatCurrentPublishDate();
 
@@ -497,7 +713,7 @@ export function saveProject(project: ProjectDetail): ProjectDetail {
           releaseDate: currentDate,
           firmwareUrl: '',
           flashAddress: '0x00',
-          versionNote: 'Initial release build.',
+          versionNote: '',
         }
       ];
 
@@ -518,11 +734,16 @@ export function saveProject(project: ProjectDetail): ProjectDetail {
   if (existingIdx >= 0) {
     all[existingIdx] = toSave;
   } else {
-    // Insert new project at the beginning of the list
     all.unshift(toSave);
   }
 
   persistProjects(all);
+
+  // Background DB sync
+  api.projects.save(toSave).catch((err) => {
+    console.warn('Background project DB save notice:', err);
+  });
+
   return toSave;
 }
 
@@ -532,7 +753,7 @@ export function saveProject(project: ProjectDetail): ProjectDetail {
 export function toggleFeaturedProject(id: string): boolean {
   if (!id) return false;
   const cleanId = id.trim().toLowerCase();
-  const all = getStoredProjects();
+  const all = [...getStoredProjects()];
   const project = all.find((p) => p.id.toLowerCase() === cleanId);
   if (!project) return false;
 
@@ -541,6 +762,9 @@ export function toggleFeaturedProject(id: string): boolean {
   project.isFeatured = nextVal;
 
   persistProjects(all);
+
+  // Sync with DB
+  api.projects.toggleFeatured(cleanId).catch(() => {});
   return true;
 }
 
@@ -550,7 +774,7 @@ export function toggleFeaturedProject(id: string): boolean {
 export function setProjectFeatured(id: string, featured: boolean): boolean {
   if (!id) return false;
   const cleanId = id.trim().toLowerCase();
-  const all = getStoredProjects();
+  const all = [...getStoredProjects()];
   const project = all.find((p) => p.id.toLowerCase() === cleanId);
   if (!project) return false;
 
@@ -558,6 +782,7 @@ export function setProjectFeatured(id: string, featured: boolean): boolean {
   project.isFeatured = featured;
 
   persistProjects(all);
+  api.projects.update(cleanId, { featured }).catch(() => {});
   return true;
 }
 
@@ -570,7 +795,6 @@ export function getFeaturedProjects(): ProjectDetail[] {
   if (explicitlyFeatured.length > 0) {
     return explicitlyFeatured;
   }
-  // Fallback: return top published projects
   return publicList.slice(0, 6);
 }
 
@@ -580,7 +804,7 @@ export function getFeaturedProjects(): ProjectDetail[] {
 export function approveProject(id: string): boolean {
   if (!id) return false;
   const cleanId = id.trim().toLowerCase();
-  const all = getStoredProjects();
+  const all = [...getStoredProjects()];
   const project = all.find((p) => p.id.toLowerCase() === cleanId);
   if (!project) return false;
 
@@ -590,6 +814,7 @@ export function approveProject(id: string): boolean {
   project.publishDate = project.publishDate || currentDate;
 
   persistProjects(all);
+  api.projects.update(cleanId, { status: 'published', visibility: 'public', publishDate: project.publishDate }).catch(() => {});
   return true;
 }
 
@@ -599,7 +824,7 @@ export function approveProject(id: string): boolean {
 export function rejectProject(id: string): boolean {
   if (!id) return false;
   const cleanId = id.trim().toLowerCase();
-  const all = getStoredProjects();
+  const all = [...getStoredProjects()];
   const project = all.find((p) => p.id.toLowerCase() === cleanId);
   if (!project) return false;
 
@@ -607,11 +832,12 @@ export function rejectProject(id: string): boolean {
   project.visibility = 'draft';
 
   persistProjects(all);
+  api.projects.update(cleanId, { status: 'rejected', visibility: 'draft' }).catch(() => {});
   return true;
 }
 
 /**
- * Deletes a project by ID.
+ * Deletes a project by ID across cache and backend database.
  */
 export function deleteProject(id: string): boolean {
   if (!id) return false;
@@ -621,9 +847,26 @@ export function deleteProject(id: string): boolean {
 
   if (filtered.length !== all.length) {
     persistProjects(filtered);
+    api.projects.delete(cleanId).catch((err) => {
+      console.warn('Backend delete project notice:', err);
+    });
     return true;
   }
   return false;
+}
+
+/**
+ * Updates the flash count of a project in memory and notifies subscribers.
+ */
+export function updateProjectFlashCountInMemory(id: string, count: number): void {
+  if (!id) return;
+  const cleanId = id.trim().toLowerCase();
+  const all = [...getStoredProjects()];
+  const project = all.find((p) => p.id.toLowerCase() === cleanId);
+  if (project) {
+    project.flashCount = count;
+    persistProjects(all);
+  }
 }
 
 /**
@@ -634,6 +877,11 @@ export function subscribeProjects(callback: (projects: ProjectDetail[]) => void)
 
   window.addEventListener(UPDATE_EVENT, handleUpdate);
   window.addEventListener('storage', handleUpdate);
+
+  // Trigger once immediately if projects exist
+  if (memoryProjectsCache.length > 0) {
+    callback(memoryProjectsCache);
+  }
 
   return () => {
     window.removeEventListener(UPDATE_EVENT, handleUpdate);

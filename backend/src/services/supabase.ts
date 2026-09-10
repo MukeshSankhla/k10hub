@@ -42,6 +42,19 @@ export async function verifyAuthToken(token: string): Promise<{ user: VerifiedAu
     return { user: null, error: 'No authorization token provided' };
   }
 
+  // Development bypass token for local development & browser tests
+  if (process.env.NODE_ENV === 'development' && token === 'dev-admin-token') {
+    return {
+      user: {
+        uid: 'dev-admin-uid-mukesh',
+        email: 'mukeshdiy1@gmail.com',
+        name: 'Mukesh Admin',
+        avatarUrl: undefined,
+      },
+      error: null,
+    };
+  }
+
   const supabase = getSupabaseClient();
   if (!supabase) {
     return {

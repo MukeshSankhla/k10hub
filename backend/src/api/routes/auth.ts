@@ -2,7 +2,7 @@ import { Router, Response, Request } from 'express';
 import { z } from 'zod';
 import { eq, desc, or, like, and } from 'drizzle-orm';
 import { db } from '../../config/database';
-import { users, authorApplications, authors } from '../../db/schema';
+import { users, authorApplications } from '../../db/schema';
 import { requireAuth, AuthRequest, syncOrProvisionUser } from '../../middleware/auth';
 import { projectService } from '../../services/ProjectService';
 import { getSupabaseClient } from '../../services/supabase';
@@ -46,59 +46,66 @@ const updateProfileSchema = z.object({
 });
 
 const registerSchema = z.object({
-  email: z.string().trim().email('Please enter a valid email address'),
-  password: z.string().min(8, 'Password must be at least 8 characters long'),
-  name: z.string().trim().min(2, 'Name must be at least 2 characters long').max(60),
+  email: z.string().email('Invalid email address').max(255),
+  password: z.string().min(8, 'Password must be at least 8 characters').max(72),
+  name: z.string().min(2, 'Name must be at least 2 characters').max(60),
 });
 
 /**
  * POST /api/auth/register
- * Maker account creation via Supabase Admin API with auto-confirmed email.
- * Bypasses public SMTP rate limits and delivers instant active account.
+ * Register a new user via Supabase Auth & sync into local DB
  */
 router.post('/register', async (req: Request, res: Response) => {
   try {
-    const parseResult = registerSchema.safeParse(req.body);
-    if (!parseResult.success) {
+    const parsed = registerSchema.safeParse(req.body);
+    if (!parsed.success) {
       return res.status(400).json({
         error: 'VALIDATION_ERROR',
-        message: parseResult.error.errors[0]?.message || 'Invalid registration data',
+        message: parsed.error.issues[0]?.message || 'Invalid registration details',
       });
     }
 
-    const { email, password, name } = parseResult.data;
-    const normalizedEmail = email.toLowerCase();
-    const supabase = getSupabaseClient();
+    const { email, password, name } = parsed.data;
+    const normalizedEmail = email.trim().toLowerCase();
 
+    // Check if user already exists locally
+    const existingUser = await db.query.users.findFirst({
+      where: eq(users.email, normalizedEmail),
+    });
+    if (existingUser) {
+      return res.status(400).json({
+        error: 'USER_ALREADY_EXISTS',
+        message: 'An account with this email address already exists. Please sign in instead.',
+      });
+    }
+
+    // Register with Supabase
+    const supabase = getSupabaseClient();
     if (!supabase) {
       return res.status(500).json({
-        error: 'SUPABASE_NOT_CONFIGURED',
-        message: 'Authentication service is not configured on the backend.',
+        error: 'AUTH_CONFIG_ERROR',
+        message: 'Authentication service not configured.',
       });
     }
-
-    // Use admin client to create pre-confirmed user (bypasses SMTP rate limits)
-    const { data, error } = await supabase.auth.admin.createUser({
+    const { data, error } = await supabase.auth.signUp({
       email: normalizedEmail,
       password,
-      email_confirm: true,
-      user_metadata: {
-        name,
-        full_name: name,
+      options: {
+        data: { name },
       },
     });
 
     if (error) {
-      const msg = error.message || 'Failed to create user';
-      if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('exists')) {
-        return res.status(409).json({
+      const msg = error.message.toLowerCase();
+      if (msg.includes('already registered') || msg.includes('user already exists')) {
+        return res.status(400).json({
           error: 'USER_ALREADY_EXISTS',
           message: 'An account with this email address already exists. Please sign in instead.',
         });
       }
       return res.status(400).json({
         error: 'REGISTRATION_FAILED',
-        message: msg,
+        message: error.message,
       });
     }
 
@@ -134,26 +141,9 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
 
     const userRecord = await db.query.users.findFirst({
       where: eq(users.id, user.id),
-      with: { author: true },
     });
 
     const dbUser = (userRecord || user) as any;
-
-    // Auto-link author record for admin or author if not yet linked
-    if (!dbUser.authorId && (dbUser.role === 'admin' || dbUser.role === 'author')) {
-      const existingAuthor = await db.query.authors.findFirst({
-        where: or(
-          eq(authors.slug, 'mukesh-sankhla'),
-          like(authors.name, `%${dbUser.name}%`)
-        ),
-      });
-
-      if (existingAuthor) {
-        await db.update(users).set({ authorId: existingAuthor.id }).where(eq(users.id, dbUser.id));
-        dbUser.authorId = existingAuthor.id;
-        dbUser.author = existingAuthor;
-      }
-    }
 
     // Fetch latest application if any
     const latestApplication = await db.query.authorApplications.findFirst({
@@ -163,18 +153,8 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
 
     // Fetch contributed projects for this author/admin
     let contributedProjects: any[] = [];
-    if (dbUser.authorId) {
-      contributedProjects = await projectService.getProjectsByAuthor(dbUser.authorId);
-    }
-    
-    // If admin and has 0 personal author projects, populate with platform projects they manage
-    if (contributedProjects.length === 0 && dbUser.role === 'admin') {
-      const teamAuthor = await db.query.authors.findFirst({
-        where: eq(authors.slug, 'k10-hub-team'),
-      });
-      if (teamAuthor) {
-        contributedProjects = await projectService.getProjectsByAuthor(teamAuthor.id);
-      }
+    if (dbUser.role === 'admin' || dbUser.role === 'author') {
+      contributedProjects = await projectService.getProjectsByAuthor(dbUser.id, dbUser.email, dbUser.supabaseUid);
     }
 
     return res.json({
@@ -184,18 +164,26 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
         email: dbUser.email,
         name: dbUser.name,
         avatarUrl: dbUser.avatarUrl,
-        bio: dbUser.bio || dbUser.author?.bio || null,
-        githubUrl: dbUser.githubUrl || dbUser.author?.githubUrl || null,
-        websiteUrl: dbUser.websiteUrl || dbUser.author?.websiteUrl || null,
-        socialPlatform: dbUser.socialPlatform || dbUser.author?.socialPlatform || 'linkedin',
-        socialUrl: dbUser.socialUrl || dbUser.author?.socialUrl || null,
-        instagramUrl: dbUser.instagramUrl || dbUser.author?.instagramUrl || null,
-        youtubeUrl: dbUser.youtubeUrl || dbUser.author?.youtubeUrl || null,
-        linkedinUrl: dbUser.linkedinUrl || dbUser.author?.linkedinUrl || null,
+        bio: dbUser.bio || null,
+        githubUrl: dbUser.githubUrl || null,
+        websiteUrl: dbUser.websiteUrl || null,
+        socialPlatform: dbUser.socialPlatform || 'linkedin',
+        socialUrl: dbUser.socialUrl || null,
+        instagramUrl: dbUser.instagramUrl || null,
+        youtubeUrl: dbUser.youtubeUrl || null,
+        linkedinUrl: dbUser.linkedinUrl || null,
         role: dbUser.role,
         status: dbUser.status,
-        authorId: dbUser.authorId,
-        author: dbUser.author || null,
+        authorId: dbUser.id,
+        author: {
+          id: dbUser.id,
+          name: dbUser.name,
+          bio: dbUser.bio,
+          avatarUrl: dbUser.avatarUrl,
+          githubUrl: dbUser.githubUrl,
+          websiteUrl: dbUser.websiteUrl,
+          role: dbUser.role,
+        },
         createdAt: dbUser.createdAt,
         lastSignInAt: dbUser.lastSignInAt,
       },
@@ -241,27 +229,8 @@ router.patch('/profile', requireAuth, async (req: AuthRequest, res: Response) =>
 
     await db.update(users).set(updates).where(eq(users.id, user.id));
 
-    // Also synchronize author record if user has authorId or is author/admin
-    let authorId = user.authorId;
-    if (authorId) {
-      const authorUpdates: any = { updatedAt: now };
-      if (data.name) authorUpdates.name = data.name;
-      if (data.avatarUrl !== undefined) authorUpdates.avatarUrl = data.avatarUrl || null;
-      if (data.bio !== undefined) authorUpdates.bio = data.bio || null;
-      if (data.githubUrl !== undefined) authorUpdates.githubUrl = data.githubUrl || null;
-      if (data.websiteUrl !== undefined) authorUpdates.websiteUrl = data.websiteUrl || null;
-      if (data.socialPlatform !== undefined) authorUpdates.socialPlatform = data.socialPlatform || null;
-      if (data.socialUrl !== undefined) authorUpdates.socialUrl = data.socialUrl || null;
-      if (data.instagramUrl !== undefined) authorUpdates.instagramUrl = data.instagramUrl || null;
-      if (data.youtubeUrl !== undefined) authorUpdates.youtubeUrl = data.youtubeUrl || null;
-      if (data.linkedinUrl !== undefined) authorUpdates.linkedinUrl = data.linkedinUrl || null;
-
-      await db.update(authors).set(authorUpdates).where(eq(authors.id, authorId));
-    }
-
     const updatedUser = await db.query.users.findFirst({
       where: eq(users.id, user.id),
-      with: { author: true },
     });
 
     return res.json({
@@ -318,55 +287,39 @@ router.post('/apply-author', requireAuth, async (req: AuthRequest, res: Response
       });
     }
 
-    const parseResult = applyAuthorSchema.safeParse(req.body);
-    if (!parseResult.success) {
+    const { bio, githubUrl, hardwareExperience, sampleProjectIdeas } = req.body;
+
+    if (!bio || !hardwareExperience || !sampleProjectIdeas) {
       return res.status(400).json({
-        error: 'VALIDATION_ERROR',
-        message: parseResult.error.errors[0]?.message || 'Invalid form data',
-      });
-    }
-
-    // Check if user was previously an approved author and subsequently demoted
-    const previousApproved = await db.query.authorApplications.findFirst({
-      where: and(
-        eq(authorApplications.userId, user.id),
-        eq(authorApplications.status, 'approved')
-      ),
-    });
-
-    if (previousApproved && user.role === 'user') {
-      return res.status(403).json({
-        error: 'AUTHOR_DEMOTED',
-        message: 'You were previously an approved Author, but your access was demoted by a Platform Administrator. Please contact admin@k10hub.io to appeal or restore your author privileges.',
+        error: 'MISSING_FIELDS',
+        message: 'Bio, hardware experience, and project ideas are required.',
       });
     }
 
     // Check if there is already a pending application
-    const existingPending = await db.query.authorApplications.findFirst({
-      where: eq(authorApplications.userId, user.id),
-      orderBy: [desc(authorApplications.createdAt)],
+    const existing = await db.query.authorApplications.findFirst({
+      where: and(
+        eq(authorApplications.userId, user.id),
+        eq(authorApplications.status, 'pending')
+      ),
     });
 
-    if (existingPending && existingPending.status === 'pending') {
-      return res.status(409).json({
-        error: 'APPLICATION_PENDING',
-        message: 'You already have an author application under review by the K10 Hub team.',
+    if (existing) {
+      return res.status(400).json({
+        error: 'DUPLICATE_APPLICATION',
+        message: 'You already have an author application pending review.',
       });
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const { bio, githubUrl, workedOnUnihiker, unihikerProjectUrl } = parseResult.data;
-    const hardwareExp = parseResult.data.hardwareExperience || (workedOnUnihiker ? `Worked on UNIHIKER: Yes (${unihikerProjectUrl || 'Confirmed'})` : 'Worked on UNIHIKER: No (New maker)');
-    const sampleIdeas = parseResult.data.sampleProjectIdeas || 'Accepted K10 Hub Author Legal Policies and Publishing Code of Conduct.';
-
-    const [created] = await db
+    const [inserted] = await db
       .insert(authorApplications)
       .values({
         userId: user.id,
-        bio,
-        githubUrl: githubUrl || null,
-        hardwareExperience: hardwareExp,
-        sampleProjectIdeas: sampleIdeas,
+        bio: bio.trim(),
+        githubUrl: githubUrl ? githubUrl.trim() : null,
+        hardwareExperience: hardwareExperience.trim(),
+        sampleProjectIdeas: sampleProjectIdeas.trim(),
         status: 'pending',
         createdAt: now,
         updatedAt: now,
@@ -375,11 +328,11 @@ router.post('/apply-author', requireAuth, async (req: AuthRequest, res: Response
 
     return res.status(201).json({
       success: true,
-      message: 'Author application submitted successfully! Administrators will review your request.',
-      application: created,
+      message: 'Your author application has been submitted successfully!',
+      application: inserted,
     });
   } catch (error: any) {
-    console.error('Error submitting author application:', error);
+    console.error('Apply author error:', error);
     return res.status(500).json({ error: 'APPLICATION_ERROR', message: error.message });
   }
 });
@@ -403,23 +356,34 @@ router.get('/my-application', requireAuth, async (req: AuthRequest, res: Respons
 
 /**
  * GET /api/auth/profile/:identifier
- * Public profile details
+ * Public user / creator profile lookup
  */
-router.get('/profile/:identifier', async (req, res) => {
+router.get('/profile/:identifier', async (req: Request, res: Response) => {
   try {
     const { identifier } = req.params;
-    const clean = identifier.trim();
+    if (!identifier) {
+      return res.status(400).json({ error: 'MISSING_IDENTIFIER', message: 'Identifier is required' });
+    }
 
-    const isNum = !isNaN(Number(clean));
-    const userRecord = await db.query.users.findFirst({
-      where: isNum
-        ? eq(users.id, Number(clean))
-        : or(
-            eq(users.email, clean),
-            like(users.name, `%${clean}%`)
-          ),
-      with: { author: true },
-    });
+    const clean = identifier.trim();
+    const isNumeric = /^\d+$/.test(clean);
+
+    let userRecord = null;
+    if (isNumeric) {
+      userRecord = await db.query.users.findFirst({
+        where: eq(users.id, parseInt(clean)),
+      });
+    }
+
+    if (!userRecord) {
+      userRecord = await db.query.users.findFirst({
+        where: or(
+          eq(users.supabaseUid, clean),
+          eq(users.email, clean.toLowerCase()),
+          like(users.name, `%${clean}%`)
+        ),
+      });
+    }
 
     if (userRecord) {
       return res.json({
@@ -427,41 +391,15 @@ router.get('/profile/:identifier', async (req, res) => {
           id: userRecord.id,
           name: userRecord.name,
           avatarUrl: userRecord.avatarUrl,
-          bio: userRecord.bio || userRecord.author?.bio || null,
-          githubUrl: userRecord.githubUrl || userRecord.author?.githubUrl || null,
-          websiteUrl: userRecord.websiteUrl || userRecord.author?.websiteUrl || null,
-          socialPlatform: userRecord.socialPlatform || userRecord.author?.socialPlatform || null,
-          socialUrl: userRecord.socialUrl || userRecord.author?.socialUrl || null,
-          instagramUrl: userRecord.instagramUrl || userRecord.author?.instagramUrl || null,
-          youtubeUrl: userRecord.youtubeUrl || userRecord.author?.youtubeUrl || null,
-          linkedinUrl: userRecord.linkedinUrl || userRecord.author?.linkedinUrl || null,
+          bio: userRecord.bio || null,
+          githubUrl: userRecord.githubUrl || null,
+          websiteUrl: userRecord.websiteUrl || null,
+          socialPlatform: userRecord.socialPlatform || 'linkedin',
+          socialUrl: userRecord.socialUrl || null,
+          instagramUrl: userRecord.instagramUrl || null,
+          youtubeUrl: userRecord.youtubeUrl || null,
+          linkedinUrl: userRecord.linkedinUrl || null,
           role: userRecord.role,
-        }
-      });
-    }
-
-    const authorRecord = await db.query.authors.findFirst({
-      where: or(
-        eq(authors.slug, clean.toLowerCase()),
-        like(authors.name, `%${clean}%`)
-      ),
-    });
-
-    if (authorRecord) {
-      return res.json({
-        user: {
-          id: authorRecord.id,
-          name: authorRecord.name,
-          avatarUrl: authorRecord.avatarUrl,
-          bio: authorRecord.bio,
-          githubUrl: authorRecord.githubUrl,
-          websiteUrl: authorRecord.websiteUrl,
-          socialPlatform: authorRecord.socialPlatform,
-          socialUrl: authorRecord.socialUrl,
-          instagramUrl: authorRecord.instagramUrl,
-          youtubeUrl: authorRecord.youtubeUrl,
-          linkedinUrl: authorRecord.linkedinUrl,
-          role: 'author',
         }
       });
     }

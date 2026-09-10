@@ -3,7 +3,6 @@ import { Link, NavLink, useNavigate } from 'react-router-dom';
 import {
   Menu,
   X,
-  Github,
   User,
   Shield,
   LogOut,
@@ -16,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import UserBadge from '../common/UserBadge';
+import NotificationBell from '../notifications/NotificationBell';
 import { getPublicProjects, resolveProjectAuthor } from '../../services/projects/projectStorageService';
 
 const NAV_LINKS = [
@@ -198,13 +198,12 @@ export default function Header() {
                   backgroundColor: 'var(--color-surface)',
                   border: searchOpen && cleanSearch ? '1.5px solid var(--color-accent)' : '1.5px solid var(--color-border)',
                   borderRadius: '10px',
-                  padding: '0 16px',
+                  padding: '0 12px 0 16px',
                   height: '46px',
                   boxShadow: searchOpen && cleanSearch ? '0 0 0 3px var(--color-accent-light)' : 'var(--shadow-xs)',
                   transition: 'all 0.18s ease',
                 }}
               >
-                <Search size={18} style={{ color: 'var(--color-ink-tertiary)', marginRight: 12, flexShrink: 0 }} />
                 <input
                   type="text"
                   value={searchQuery}
@@ -213,18 +212,18 @@ export default function Header() {
                     setSearchOpen(true);
                   }}
                   onFocus={() => setSearchOpen(true)}
-                  placeholder="Search projects, tutorials, authors..."
+                  placeholder="Search projects, tutorials..."
                   style={{
                     background: 'none',
                     border: 'none',
                     outline: 'none',
-                    fontSize: '15.5px',
+                    fontSize: '15px',
                     fontWeight: 500,
                     color: 'var(--color-ink-primary)',
                     width: '100%',
                   }}
                 />
-                {searchQuery ? (
+                {searchQuery && (
                   <button
                     type="button"
                     onClick={() => {
@@ -234,31 +233,42 @@ export default function Header() {
                     style={{
                       background: 'none',
                       border: 'none',
-                      padding: 2,
+                      padding: 4,
                       cursor: 'pointer',
                       color: 'var(--color-ink-tertiary)',
                       display: 'flex',
                       alignItems: 'center',
+                      marginRight: 4,
                     }}
+                    aria-label="Clear search"
                   >
                     <X size={16} />
                   </button>
-                ) : (
-                  <span
-                    style={{
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)',
-                      color: 'var(--color-ink-tertiary)',
-                      backgroundColor: 'var(--color-surface-sunken)',
-                      border: '1px solid var(--color-border)',
-                      borderRadius: '5px',
-                      padding: '2px 8px',
-                      lineHeight: '1.2',
-                    }}
-                  >
-                    /
-                  </span>
                 )}
+                <button
+                  type="submit"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 4,
+                    cursor: 'pointer',
+                    color: 'var(--color-ink-tertiary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'color 0.15s ease',
+                  }}
+                  aria-label="Submit search"
+                  title="Search"
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = 'var(--color-ink-primary)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = 'var(--color-ink-tertiary)';
+                  }}
+                >
+                  <Search size={18} />
+                </button>
               </div>
             </form>
 
@@ -455,17 +465,8 @@ export default function Header() {
 
           {/* Actions */}
           <div className="nav__actions" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <a
-              href="https://github.com/mukeshsankhla"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn btn--ghost"
-              aria-label="GitHub"
-              title="View on GitHub"
-              style={{ width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', padding: 0 }}
-            >
-              <Github size={18} aria-hidden="true" />
-            </a>
+            {/* Notification Bell */}
+            {user && <NotificationBell />}
 
             {/* Auth section */}
             {user ? (
@@ -721,7 +722,7 @@ export default function Header() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search projects, tutorials, authors..."
+                placeholder="Search projects, tutorials..."
                 style={{
                   background: 'none',
                   border: 'none',

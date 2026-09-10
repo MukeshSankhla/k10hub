@@ -1,13 +1,6 @@
 import { db } from '../config/database';
 import { initDatabase } from './init';
-import {
-  authors,
-  categories,
-  tags,
-  projects,
-  projectHardware,
-  libraries,
-} from './schema';
+import { projects } from './schema';
 
 async function seed() {
   console.log('🌱 Seeding K10 Hub database...');
@@ -15,117 +8,51 @@ async function seed() {
   // Ensure tables exist first
   await initDatabase();
 
-  // ─── Authors ────────────────────────────────────────────────────────────────
-  console.log('  Creating authors...');
-  await db.insert(authors).values([
+  // ─── Projects ───────────────────────────────────────────────────────────────
+  console.log('  Creating projects...');
+  const now = Math.floor(Date.now() / 1000);
+  await db.insert(projects).values([
     {
-      slug: 'k10-hub-team',
-      name: 'K10 Hub Team',
-      bio: 'Official K10 Hub project team — curated projects for the UNIHIKER K10.',
-      githubUrl: 'https://github.com/k10hub',
-    },
-    {
-      slug: 'mukesh-sankhla',
-      name: 'Mukesh Sankhla',
-      bio: 'Maker, educator and the creator of K10 Hub.',
-      githubUrl: 'https://github.com/mukeshsankhla',
-      websiteUrl: 'https://mukeshsankhla.github.io',
-    },
+      id: 'ai-buddy',
+      slug: 'ai-buddy',
+      title: 'Ai Buddy - DIY AI Companion',
+      publishDate: '10 Sep 2026, 09:00 AM',
+      type: 'Project',
+      level: 2,
+      author: 'Mukesh Sankhla',
+      authorAvatar: '',
+      authorRole: 'admin',
+      authorId: '1',
+      authorEmail: 'mukesh@makerbrains.com',
+      status: 'published',
+      visibility: 'public',
+      flashCount: 12,
+      likeCount: 5,
+      viewCount: 42,
+      featured: true,
+      description: 'An interactive desktop AI companion powered by UNIHIKER K10 featuring voice expressions, real-time sensors, and eye animations.',
+      coverImage: 'https://images.unsplash.com/photo-1535378917042-10a22c95931a?auto=format&fit=crop&w=1200&q=80',
+      docLink: '',
+      githubLink: 'https://github.com/mukeshsankhla/k10-ai-buddy',
+      videoLink: '',
+      markdownContent: `# Ai Buddy - DIY AI Companion\n\nWelcome to the **Ai Buddy** project! This project turns your UNIHIKER K10 into an emotive desktop robot companion.\n\n### Features\n- 🤖 Expressive LCD face animations\n- 🎙️ Onboard microphone speech recognition\n- 🔊 Built-in speaker TTS audio feedback\n- 💡 RGB status indicators\n\n### Hardware Required\n- UNIHIKER K10 Board\n- USB-C Cable\n\n### Getting Started\nPlug in your K10 and click **Flash Device** to get started!`,
+      compatibleBoard: 'UNIHIKER K10',
+      license: 'MIT',
+      tags: JSON.stringify(['AI & Machine Learning', 'Robotics', 'Smart Devices']),
+      firmwares: JSON.stringify([
+        {
+          version: 'v1.0.0',
+          name: 'Ai Buddy Initial Firmware',
+          releaseDate: '10 Sep 2026, 09:00 AM',
+          firmwareUrl: '',
+          flashAddress: '0x00',
+          versionNote: 'Initial public build with animated expressions and sensor loop.',
+        }
+      ]),
+      createdAt: now,
+      updatedAt: now,
+    }
   ]).onConflictDoNothing();
-
-  // ─── Categories ─────────────────────────────────────────────────────────────
-  console.log('  Creating categories...');
-  await db.insert(categories).values([
-    {
-      slug: 'fundamentals',
-      name: 'Fundamentals',
-      description: 'Core electronics — GPIO, LEDs, buttons and basic hardware interaction.',
-      iconName: 'cpu',
-      color: '#1D4ED8',
-      sortOrder: 1,
-    },
-    {
-      slug: 'sensors-io',
-      name: 'Sensors & I/O',
-      description: 'Explore the K10 sensors, display, camera, audio and connectivity.',
-      iconName: 'activity',
-      color: '#047857',
-      sortOrder: 2,
-    },
-    {
-      slug: 'ai-vision',
-      name: 'AI & Vision',
-      description: 'Computer vision, face detection, recognition and AI applications.',
-      iconName: 'eye',
-      color: '#6D28D9',
-      sortOrder: 3,
-    },
-    {
-      slug: 'community',
-      name: 'Community',
-      description: 'Projects built by makers, developers and educators around the world.',
-      iconName: 'users',
-      color: '#B45309',
-      sortOrder: 4,
-    },
-  ]).onConflictDoNothing();
-
-  // ─── Tags ───────────────────────────────────────────────────────────────────
-  console.log('  Creating tags...');
-  await db.insert(tags).values([
-    { slug: 'led', name: 'LED' },
-    { slug: 'gpio', name: 'GPIO' },
-    { slug: 'button', name: 'Button' },
-    { slug: 'display', name: 'Display' },
-    { slug: 'camera', name: 'Camera' },
-    { slug: 'wifi', name: 'Wi-Fi' },
-    { slug: 'bluetooth', name: 'Bluetooth' },
-    { slug: 'audio', name: 'Audio' },
-    { slug: 'sensor', name: 'Sensor' },
-    { slug: 'accelerometer', name: 'Accelerometer' },
-    { slug: 'face-detection', name: 'Face Detection' },
-    { slug: 'face-recognition', name: 'Face Recognition' },
-    { slug: 'computer-vision', name: 'Computer Vision' },
-    { slug: 'arduino', name: 'Arduino' },
-    { slug: 'micropython', name: 'MicroPython' },
-    { slug: 'tts', name: 'Text-to-Speech' },
-    { slug: 'asr', name: 'Speech Recognition' },
-    { slug: 'iot', name: 'IoT' },
-    { slug: 'rgb', name: 'RGB' },
-    { slug: 'beginners', name: 'Beginners' },
-  ]).onConflictDoNothing();
-
-  // ─── Libraries ──────────────────────────────────────────────────────────────
-  console.log('  Creating libraries...');
-  await db.insert(libraries).values([
-    {
-      slug: 'unihiker-k10-arduino',
-      name: 'UNIHIKER K10 Arduino Library',
-      description: 'Official Arduino library for the UNIHIKER K10.',
-      repositoryUrl: 'https://github.com/DFRobot/UNIHIKER-K10',
-    },
-    {
-      slug: 'lvgl',
-      name: 'LVGL',
-      version: '8.3.x',
-      description: 'Light and Versatile Graphics Library.',
-      repositoryUrl: 'https://github.com/lvgl/lvgl',
-    },
-  ]).onConflictDoNothing();
-
-  // ─── Get inserted IDs ───────────────────────────────────────────────────────
-  const teamAuthor = await db.query.authors.findFirst({
-    where: (a, { eq }) => eq(a.slug, 'k10-hub-team'),
-  });
-  const fundamentalsCat = await db.query.categories.findFirst({
-    where: (c, { eq }) => eq(c.slug, 'fundamentals'),
-  });
-  const aiCat = await db.query.categories.findFirst({
-    where: (c, { eq }) => eq(c.slug, 'ai-vision'),
-  });
-
-  // ─── Projects (clean - no dummy projects) ───────────────────────────────────
-  console.log('  Skipping dummy projects (clean app)...');
 
   console.log('✅ Database seeded successfully!');
   process.exit(0);
@@ -135,3 +62,4 @@ seed().catch((err) => {
   console.error('❌ Seed failed:', err);
   process.exit(1);
 });
+

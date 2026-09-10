@@ -3,182 +3,106 @@ import { relations } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
 
 
-// ─── Authors ──────────────────────────────────────────────────────────────────
-export const authors = sqliteTable('authors', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  slug: text('slug').notNull().unique(),
-  name: text('name').notNull(),
-  bio: text('bio'),
-  avatarUrl: text('avatar_url'),
-  githubUrl: text('github_url'),
-  websiteUrl: text('website_url'),
-  socialPlatform: text('social_platform'),
-  socialUrl: text('social_url'),
-  instagramUrl: text('instagram_url'),
-  youtubeUrl: text('youtube_url'),
-  linkedinUrl: text('linkedin_url'),
-  createdAt: integer('created_at').default(sql`(unixepoch())`),
-  updatedAt: integer('updated_at').default(sql`(unixepoch())`),
-});
-
-// ─── Categories ───────────────────────────────────────────────────────────────
-export const categories = sqliteTable('categories', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  slug: text('slug').notNull().unique(),
-  name: text('name').notNull(),
-  description: text('description'),
-  iconName: text('icon_name'),
-  color: text('color'),
-  sortOrder: integer('sort_order').notNull().default(0),
-  createdAt: integer('created_at').default(sql`(unixepoch())`),
-});
-
-// ─── Tags ─────────────────────────────────────────────────────────────────────
-export const tags = sqliteTable('tags', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  slug: text('slug').notNull().unique(),
-  name: text('name').notNull(),
-  createdAt: integer('created_at').default(sql`(unixepoch())`),
-});
-
 // ─── Projects ─────────────────────────────────────────────────────────────────
 export const projects = sqliteTable('projects', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
+  id: text('id').primaryKey(),
   slug: text('slug').notNull().unique(),
   title: text('title').notNull(),
-  shortDescription: text('short_description').notNull(),
-  description: text('description').notNull(),
-  categoryId: integer('category_id').references(() => categories.id),
-  authorId: integer('author_id').references(() => authors.id),
-  difficulty: text('difficulty', { enum: ['beginner', 'intermediate', 'advanced'] }).notNull().default('beginner'),
-  estimatedMinutes: integer('estimated_minutes'),
-  isPublished: integer('is_published', { mode: 'boolean' }).notNull().default(false),
-  isFeatured: integer('is_featured', { mode: 'boolean' }).notNull().default(false),
-  isCommunity: integer('is_community', { mode: 'boolean' }).notNull().default(false),
-  isOfficial: integer('is_official', { mode: 'boolean' }).notNull().default(true),
-  coverImageUrl: text('cover_image_url'),
-  videoUrl: text('video_url'),
-  githubUrl: text('github_url'),
-  exampleCode: text('example_code'),
-  firmwareUrl: text('firmware_url'),
-  platformioConfig: text('platformio_config'),
-  viewCount: integer('view_count').notNull().default(0),
-  likeCount: integer('like_count').notNull().default(0),
+  publishDate: text('publish_date'),
+  type: text('type').notNull().default('Project'),
+  level: integer('level').notNull().default(1),
+  author: text('author').notNull().default('Maker'),
+  authorAvatar: text('author_avatar'),
+  authorRole: text('author_role').default('author'),
+  authorId: text('author_id'),
+  authorEmail: text('author_email'),
+  status: text('status', { enum: ['draft', 'pending_approval', 'published', 'rejected'] }).notNull().default('published'),
+  visibility: text('visibility', { enum: ['draft', 'public'] }).notNull().default('public'),
   flashCount: integer('flash_count').notNull().default(0),
+  likeCount: integer('like_count').notNull().default(0),
+  viewCount: integer('view_count').notNull().default(0),
+  featured: integer('featured', { mode: 'boolean' }).notNull().default(false),
+  description: text('description').notNull(),
+  coverImage: text('cover_image').notNull(),
+  docLink: text('doc_link'),
+  githubLink: text('github_link'),
+  videoLink: text('video_link'),
+  projectMdFile: text('project_md_file'),
+  markdownContent: text('markdown_content'),
+  compatibleBoard: text('compatible_board').default('UNIHIKER K10'),
+  license: text('license').default('MIT'),
+  tags: text('tags'),
+  firmwares: text('firmwares'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
   updatedAt: integer('updated_at').default(sql`(unixepoch())`),
-  publishedAt: integer('published_at'),
 });
 
-// ─── Project Hardware Requirements ────────────────────────────────────────────
-export const projectHardware = sqliteTable('project_hardware', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').notNull().references(() => projects.id),
-  name: text('name').notNull(),
-  quantity: integer('quantity').notNull().default(1),
-  isRequired: integer('is_required', { mode: 'boolean' }).notNull().default(true),
-  purchaseUrl: text('purchase_url'),
-  notes: text('notes'),
-});
-
-// ─── Libraries ────────────────────────────────────────────────────────────────
-export const libraries = sqliteTable('libraries', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  slug: text('slug').notNull().unique(),
-  name: text('name').notNull(),
-  version: text('version'),
-  description: text('description'),
-  repositoryUrl: text('repository_url'),
-  platformioLibId: text('platformio_lib_id'),
-  createdAt: integer('created_at').default(sql`(unixepoch())`),
-});
-
-// ─── Project Libraries (join) ─────────────────────────────────────────────────
-export const projectLibraries = sqliteTable('project_libraries', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').notNull().references(() => projects.id),
-  libraryId: integer('library_id').notNull().references(() => libraries.id),
-  versionConstraint: text('version_constraint'),
-});
-
-// ─── Project Tags (join) ──────────────────────────────────────────────────────
-export const projectTags = sqliteTable('project_tags', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').notNull().references(() => projects.id),
-  tagId: integer('tag_id').notNull().references(() => tags.id),
-});
-
-// ─── Tutorials ────────────────────────────────────────────────────────────────
-export const tutorials = sqliteTable('tutorials', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').notNull().references(() => projects.id),
-  stepNumber: integer('step_number').notNull(),
-  title: text('title').notNull(),
+// ─── Comments ─────────────────────────────────────────────────────────────────
+export const comments = sqliteTable('comments', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  parentId: text('parent_id'),
+  authorId: text('author_id').notNull(),
+  authorName: text('author_name').notNull(),
+  authorAvatar: text('author_avatar'),
+  authorEmail: text('author_email'),
+  authorRole: text('author_role').default('user'),
   content: text('content').notNull(),
-  imageUrl: text('image_url'),
-  codeSnippet: text('code_snippet'),
-  codeLanguage: text('code_language').default('cpp'),
+  score: integer('score').notNull().default(0),
+  upvotedBy: text('upvoted_by').default('[]'),
+  downvotedBy: text('downvoted_by').default('[]'),
+  isDeleted: integer('is_deleted', { mode: 'boolean' }).notNull().default(false),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at'),
+});
+
+// ─── Project Likes ────────────────────────────────────────────────────────────
+export const projectLikes = sqliteTable('project_likes', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull(),
+  userEmail: text('user_email'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
 });
 
-// ─── Firmware Versions ────────────────────────────────────────────────────────
-export const firmwareVersions = sqliteTable('firmware_versions', {
+// ─── Project Bookmarks ────────────────────────────────────────────────────────
+export const projectBookmarks = sqliteTable('project_bookmarks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').references(() => projects.id),
-  version: text('version').notNull(),
-  changelog: text('changelog'),
-  downloadUrl: text('download_url').notNull(),
-  fileSize: integer('file_size'),
-  sha256: text('sha256'),
-  isLatest: integer('is_latest', { mode: 'boolean' }).notNull().default(false),
-  targetChip: text('target_chip').default('ESP32-S3'),
-  flashOffset: integer('flash_offset').default(0),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull(),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
+});
+
+// ─── Flash Logs ───────────────────────────────────────────────────────────────
+export const flashLogs = sqliteTable('flash_logs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  userId: text('user_id'),
+  flashedAt: integer('flashed_at').default(sql`(unixepoch())`),
 });
 
 // ─── Relations ────────────────────────────────────────────────────────────────
-export const projectsRelations = relations(projects, ({ one, many }) => ({
-  category: one(categories, { fields: [projects.categoryId], references: [categories.id] }),
-  author: one(authors, { fields: [projects.authorId], references: [authors.id] }),
-  hardware: many(projectHardware),
-  projectLibraries: many(projectLibraries),
-  projectTags: many(projectTags),
-  tutorials: many(tutorials),
-  firmwareVersions: many(firmwareVersions),
+export const projectsRelations = relations(projects, ({ many }) => ({
+  comments: many(comments),
+  likes: many(projectLikes),
+  bookmarks: many(projectBookmarks),
+  flashLogs: many(flashLogs),
 }));
 
-export const categoriesRelations = relations(categories, ({ many }) => ({
-  projects: many(projects),
+export const commentsRelations = relations(comments, ({ one }) => ({
+  project: one(projects, { fields: [comments.projectId], references: [projects.id] }),
 }));
 
-export const authorsRelations = relations(authors, ({ many }) => ({
-  projects: many(projects),
+export const projectLikesRelations = relations(projectLikes, ({ one }) => ({
+  project: one(projects, { fields: [projectLikes.projectId], references: [projects.id] }),
 }));
 
-export const tagsRelations = relations(tags, ({ many }) => ({
-  projectTags: many(projectTags),
+export const projectBookmarksRelations = relations(projectBookmarks, ({ one }) => ({
+  project: one(projects, { fields: [projectBookmarks.projectId], references: [projects.id] }),
 }));
 
-export const projectTagsRelations = relations(projectTags, ({ one }) => ({
-  project: one(projects, { fields: [projectTags.projectId], references: [projects.id] }),
-  tag: one(tags, { fields: [projectTags.tagId], references: [tags.id] }),
-}));
-
-export const projectLibrariesRelations = relations(projectLibraries, ({ one }) => ({
-  project: one(projects, { fields: [projectLibraries.projectId], references: [projects.id] }),
-  library: one(libraries, { fields: [projectLibraries.libraryId], references: [libraries.id] }),
-}));
-
-export const projectHardwareRelations = relations(projectHardware, ({ one }) => ({
-  project: one(projects, { fields: [projectHardware.projectId], references: [projects.id] }),
-}));
-
-export const tutorialsRelations = relations(tutorials, ({ one }) => ({
-  project: one(projects, { fields: [tutorials.projectId], references: [projects.id] }),
-}));
-
-export const firmwareVersionsRelations = relations(firmwareVersions, ({ one }) => ({
-  project: one(projects, { fields: [firmwareVersions.projectId], references: [projects.id] }),
+export const flashLogsRelations = relations(flashLogs, ({ one }) => ({
+  project: one(projects, { fields: [flashLogs.projectId], references: [projects.id] }),
 }));
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -198,7 +122,6 @@ export const users = sqliteTable('users', {
   linkedinUrl: text('linkedin_url'),
   role: text('role', { enum: ['user', 'author', 'admin'] }).notNull().default('user'),
   status: text('status', { enum: ['active', 'suspended'] }).notNull().default('active'),
-  authorId: integer('author_id').references(() => authors.id),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
   updatedAt: integer('updated_at').default(sql`(unixepoch())`),
   lastSignInAt: integer('last_sign_in_at'),
@@ -220,13 +143,31 @@ export const authorApplications = sqliteTable('author_applications', {
   reviewedAt: integer('reviewed_at'),
 });
 
-export const usersRelations = relations(users, ({ one, many }) => ({
-  author: one(authors, { fields: [users.authorId], references: [authors.id] }),
+export const usersRelations = relations(users, ({ many }) => ({
   applications: many(authorApplications),
+  notifications: many(notifications),
 }));
 
 export const authorApplicationsRelations = relations(authorApplications, ({ one }) => ({
   user: one(users, { fields: [authorApplications.userId], references: [users.id] }),
   reviewer: one(users, { fields: [authorApplications.reviewedBy], references: [users.id] }),
+}));
+
+// ─── In-App Notifications ─────────────────────────────────────────────────────
+export const notifications = sqliteTable('notifications', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  type: text('type').notNull(), // 'milestone_flash' | 'project_like' | 'project_comment' | 'comment_reply' | 'author_application' | 'project_approval' | 'custom'
+  title: text('title').notNull(),
+  message: text('message').notNull(),
+  icon: text('icon').notNull().default('bell'),
+  url: text('url'),
+  isRead: integer('is_read', { mode: 'boolean' }).notNull().default(false),
+  data: text('data'), // JSON string for extra metadata
+  createdAt: integer('created_at').default(sql`(unixepoch())`),
+});
+
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  user: one(users, { fields: [notifications.userId], references: [users.id] }),
 }));
 

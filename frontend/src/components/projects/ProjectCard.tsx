@@ -57,21 +57,24 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
   const flashes = Math.max(project.flashCount || 0, getLocalFlashCount(project.id));
 
   // Community state
+  const uid = user?.id ? String(user.id) : undefined;
+  const altUid = profile?.id ? String(profile.id) : undefined;
+
   const [likeCount, setLikeCount] = useState<number>(() => getProjectLikeCount(project.id));
-  const [isLiked, setIsLiked] = useState<boolean>(() => isProjectLiked(project.id, user?.id || profile?.id));
-  const [isBookmarked, setIsBookmarked] = useState<boolean>(() => isProjectBookmarked(project.id, user?.id || profile?.id));
+  const [isLiked, setIsLiked] = useState<boolean>(() => isProjectLiked(project.id, uid || altUid));
+  const [isBookmarked, setIsBookmarked] = useState<boolean>(() => isProjectBookmarked(project.id, uid, altUid));
   const [commentCount, setCommentCount] = useState<number>(() => getProjectCommentCount(project.id));
 
   useEffect(() => {
     const update = () => {
       setLikeCount(getProjectLikeCount(project.id));
-      setIsLiked(isProjectLiked(project.id, user?.id || profile?.id));
-      setIsBookmarked(isProjectBookmarked(project.id, user?.id || profile?.id));
+      setIsLiked(isProjectLiked(project.id, uid || altUid));
+      setIsBookmarked(isProjectBookmarked(project.id, uid, altUid));
       setCommentCount(getProjectCommentCount(project.id));
     };
     const unsub = subscribeCommunity(update);
     return unsub;
-  }, [project.id, user?.id, profile?.id]);
+  }, [project.id, uid, altUid]);
 
   return (
     <div
@@ -150,13 +153,14 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              const currentUserId = user?.id || profile?.id;
-              if (!currentUserId) {
+              const currentUserId = user?.id ? String(user.id) : (profile?.id ? String(profile.id) : undefined);
+              const altUserId = profile?.id ? String(profile.id) : undefined;
+              if (!currentUserId && !altUserId) {
                 toast.warning('Please sign in to bookmark projects.', 'Sign In Required');
                 return;
               }
               try {
-                const bookmarked = toggleProjectBookmark(project.id, String(currentUserId));
+                const bookmarked = toggleProjectBookmark(project.id, currentUserId, altUserId);
                 setIsBookmarked(bookmarked);
                 if (bookmarked) {
                   toast.success('Bookmarked! View in Profile.', 'Saved');
@@ -226,7 +230,7 @@ export default function ProjectCard({ project, isCurrentAuthor }: ProjectCardPro
               width: 130,
               transform: 'rotate(45deg)',
               backgroundColor: isTutorial ? '#EAB308' : '#F59E0B',
-              color: isTutorial ? '#ffffff' : '#000000',
+              color: '#000000',
               fontSize: '10px',
               fontWeight: 800,
               letterSpacing: '0.08em',

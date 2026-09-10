@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Link, useSearchParams, useLocation, useParams } from 'react-router-dom';
+import { Link, useSearchParams, useLocation, useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { api } from '../../services/api';
 import Header from '../../components/layout/Header';
@@ -32,16 +32,19 @@ import {
   Lock,
   AlertTriangle,
   Bookmark,
+  Calendar,
 } from 'lucide-react';
 import { ProjectDetail } from '../../config/projectsData';
 import { toast } from '../../contexts/ToastContext';
 import {
   getUserBookmarkedProjects,
+  fetchUserBookmarksFromDb,
   toggleProjectBookmark,
   subscribeCommunity,
 } from '../../services/community/communityService';
 import {
   getAllProjects,
+  refreshProjectsFromBackend,
   deleteProject,
   subscribeProjects,
   isProjectAuthor,
@@ -99,15 +102,24 @@ export default function ProfilePage() {
     profile,
     application,
     role,
+    loading,
     signOut,
     applyAuthor,
     updateProfile,
     refreshProfile,
   } = useAuth();
 
+  const navigate = useNavigate();
   const { identifier } = useParams<{ identifier?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
+
+  // Redirect to home page if user is not authenticated and trying to view own profile (/profile)
+  useEffect(() => {
+    if (!identifier && !loading && !user) {
+      navigate('/', { replace: true });
+    }
+  }, [identifier, loading, user, navigate]);
 
   const isSelf = Boolean(
     identifier &&
@@ -155,11 +167,12 @@ export default function ProfilePage() {
 
   useEffect(() => {
     setAllProjects(getAllProjects());
+    refreshProjectsFromBackend().catch(() => {});
     const unsubscribe = subscribeProjects((updated) => {
       setAllProjects(updated);
     });
     return unsubscribe;
-  }, []);
+  }, [user, profile]);
 
   // Find projects published by this public author
   const cleanParamId = (identifier || '').trim().toLowerCase();
@@ -183,14 +196,23 @@ export default function ProfilePage() {
 
   // Bookmarked projects
   const [bookmarkedProjects, setBookmarkedProjects] = useState<ProjectDetail[]>(() =>
-    getUserBookmarkedProjects(user?.id || profile?.id)
+    getUserBookmarkedProjects(user?.id ? String(user.id) : undefined, profile?.id ? String(profile.id) : undefined)
   );
 
   useEffect(() => {
     const updateBookmarks = () => {
-      setBookmarkedProjects(getUserBookmarkedProjects(user?.id || profile?.id));
+      setBookmarkedProjects(
+        getUserBookmarkedProjects(user?.id ? String(user.id) : undefined, profile?.id ? String(profile.id) : undefined)
+      );
     };
     updateBookmarks();
+
+    if (user?.id || profile?.id) {
+      fetchUserBookmarksFromDb(user?.id ? String(user.id) : undefined, profile?.id ? String(profile.id) : undefined)
+        .then(() => updateBookmarks())
+        .catch(() => {});
+    }
+
     const unsub = subscribeCommunity(updateBookmarks);
     return unsub;
   }, [user?.id, profile?.id]);
@@ -204,10 +226,21 @@ export default function ProfilePage() {
     if (location.hash === '#draft' || location.hash === '#drafts') return 'draft';
     if (location.hash === '#review') return 'pending_approval';
     if (location.hash === '#bookmarks' || location.hash === '#saved') return 'bookmarked';
+    if (role === 'user' && isOwnProfile) return 'bookmarked';
     return 'published';
   };
 
   const [projectStatusFilter, setProjectStatusFilter] = useState<'published' | 'draft' | 'pending_approval' | 'bookmarked'>(resolveInitialTab);
+
+  // Default tab to bookmarked for regular users
+  useEffect(() => {
+    if (role === 'user' && isOwnProfile && projectStatusFilter !== 'bookmarked') {
+      const tabParam = searchParams.get('tab');
+      if (!tabParam || tabParam === 'published') {
+        setProjectStatusFilter('bookmarked');
+      }
+    }
+  }, [role, isOwnProfile, searchParams]);
 
   // Sync tab with URL search parameter or hash
   useEffect(() => {
@@ -373,6 +406,7 @@ export default function ProfilePage() {
 
   const handleSignOut = async () => {
     await signOut();
+    navigate('/');
   };
 
   const handleApplySubmit = async (e: React.FormEvent) => {
@@ -889,8 +923,8 @@ export default function ProfilePage() {
             </div>
           )}
 
-          {/* Section: Contributed Projects (Authors, Admins, or Public Profiles) */}
-          {(isOwnProfile ? (role === 'author' || role === 'admin') : true) && (
+          {/* Section: Contributed Projects & Bookmarks (All users see Bookmarks; Authors/Admins see Full Studio) */}
+          {(isOwnProfile || (!isOwnProfile && publicAuthorProjects.length > 0)) && (
             <div
               id="contributed-projects"
               style={{
@@ -904,9 +938,17 @@ export default function ProfilePage() {
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-5)', flexWrap: 'wrap', gap: 'var(--space-4)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                  <FolderGit2 size={20} color="var(--color-accent)" />
+                  {role === 'user' && isOwnProfile ? (
+                    <Bookmark size={20} color="var(--color-accent)" />
+                  ) : (
+                    <FolderGit2 size={20} color="var(--color-accent)" />
+                  )}
                   <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: 'var(--color-ink-primary)', margin: 0 }}>
-                    {isOwnProfile ? 'Contributed Projects & Tutorials' : `${displayName}'s Published Builds`}
+                    {!isOwnProfile
+                      ? `${displayName}'s Published Builds`
+                      : role === 'user'
+                      ? 'Bookmarked Projects & Tutorials'
+                      : 'Contributed Projects & Tutorials'}
                   </h2>
                   <span
                     style={{
@@ -919,7 +961,7 @@ export default function ProfilePage() {
                       color: 'var(--color-ink-secondary)',
                     }}
                   >
-                    {projectsList.length}
+                    {role === 'user' && isOwnProfile ? bookmarkedProjects.length : projectStatusFilter === 'bookmarked' ? bookmarkedProjects.length : projectsList.length}
                   </span>
                 </div>
 
@@ -942,36 +984,69 @@ export default function ProfilePage() {
                   flexWrap: 'wrap',
                 }}
               >
-                {/* Left: Status Filter Tabs (Published, Draft, Review) - Only for own profile */}
+                {/* Left: Status Filter Tabs (Published, Draft, Review, Bookmarks) - Only for own profile */}
                 {isOwnProfile ? (
-                  <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                    {[
-                      { id: 'published', label: 'Published', count: projectsList.filter(p => p.status === 'published' || !p.status).length },
-                      { id: 'draft', label: 'Draft', count: projectsList.filter(p => p.status === 'draft').length },
-                      { id: 'pending_approval', label: 'Review', count: projectsList.filter(p => p.status === 'pending_approval').length },
-                      { id: 'bookmarked', label: 'Bookmarks', count: bookmarkedProjects.length },
-                    ].map((tab) => (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => handleSelectTab(tab.id as any)}
-                        className={`btn btn--sm ${projectStatusFilter === tab.id ? 'btn--primary' : 'btn--secondary'}`}
-                        style={{ fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                      >
-                        <span>{tab.label}</span>
-                        <span
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      backgroundColor: 'var(--color-paper)',
+                      border: '1px solid var(--color-border)',
+                      padding: '3px 4px',
+                      borderRadius: '10px',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    {(role === 'user'
+                      ? [{ id: 'bookmarked', label: 'Bookmarks', count: bookmarkedProjects.length }]
+                      : [
+                          { id: 'published', label: 'Published', count: projectsList.filter(p => p.status === 'published' || !p.status).length },
+                          { id: 'draft', label: 'Draft', count: projectsList.filter(p => p.status === 'draft').length },
+                          { id: 'pending_approval', label: 'Review', count: projectsList.filter(p => p.status === 'pending_approval').length },
+                          { id: 'bookmarked', label: 'Bookmarks', count: bookmarkedProjects.length },
+                        ]
+                    ).map((tab) => {
+                      const isActive = projectStatusFilter === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => handleSelectTab(tab.id as any)}
                           style={{
-                            backgroundColor: projectStatusFilter === tab.id ? 'rgba(255,255,255,0.25)' : 'var(--color-paper)',
-                            borderRadius: 'var(--radius-full)',
-                            padding: '1px 6px',
-                            fontSize: '10px',
-                            fontWeight: 700,
+                            border: 'none',
+                            outline: 'none',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            fontWeight: isActive ? 600 : 500,
+                            padding: '5px 12px',
+                            borderRadius: '7px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            backgroundColor: isActive ? 'var(--color-ink-primary)' : 'transparent',
+                            color: isActive ? '#ffffff' : 'var(--color-ink-secondary)',
+                            boxShadow: isActive ? '0 1px 3px rgba(0, 0, 0, 0.12)' : 'none',
+                            transition: 'all 0.15s ease',
                           }}
                         >
-                          {tab.count}
-                        </span>
-                      </button>
-                    ))}
+                          <span>{tab.label}</span>
+                          <span
+                            style={{
+                              fontSize: '10px',
+                              padding: '1px 6px',
+                              borderRadius: '999px',
+                              backgroundColor: isActive ? 'rgba(255, 255, 255, 0.22)' : 'var(--color-surface)',
+                              border: isActive ? 'none' : '1px solid var(--color-border)',
+                              color: isActive ? '#ffffff' : 'var(--color-ink-tertiary)',
+                              fontWeight: 700,
+                            }}
+                          >
+                            {tab.count}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', fontWeight: 600 }}>
@@ -988,7 +1063,7 @@ export default function ProfilePage() {
                     backgroundColor: 'var(--color-paper)',
                     border: '1px solid var(--color-border)',
                     padding: '3px 4px',
-                    borderRadius: 'var(--radius-lg)',
+                    borderRadius: '10px',
                   }}
                 >
                   <button
@@ -998,15 +1073,16 @@ export default function ProfilePage() {
                       border: 'none',
                       outline: 'none',
                       cursor: 'pointer',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      padding: '4px 10px',
-                      borderRadius: 'var(--radius-md)',
+                      fontSize: '12px',
+                      fontWeight: projectTypeFilter === 'all' ? 600 : 500,
+                      padding: '5px 12px',
+                      borderRadius: '7px',
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '5px',
-                      backgroundColor: projectTypeFilter === 'all' ? 'var(--color-accent)' : 'transparent',
+                      backgroundColor: projectTypeFilter === 'all' ? 'var(--color-ink-primary)' : 'transparent',
                       color: projectTypeFilter === 'all' ? '#ffffff' : 'var(--color-ink-secondary)',
+                      boxShadow: projectTypeFilter === 'all' ? '0 1px 3px rgba(0, 0, 0, 0.12)' : 'none',
                       transition: 'all 0.15s ease',
                     }}
                   >
@@ -1014,9 +1090,10 @@ export default function ProfilePage() {
                     <span
                       style={{
                         fontSize: '10px',
-                        padding: '1px 5px',
+                        padding: '1px 6px',
                         borderRadius: '999px',
-                        backgroundColor: projectTypeFilter === 'all' ? 'rgba(255,255,255,0.25)' : 'var(--color-bg)',
+                        backgroundColor: projectTypeFilter === 'all' ? 'rgba(255, 255, 255, 0.22)' : 'var(--color-surface)',
+                        border: projectTypeFilter === 'all' ? 'none' : '1px solid var(--color-border)',
                         color: projectTypeFilter === 'all' ? '#ffffff' : 'var(--color-ink-tertiary)',
                         fontWeight: 700,
                       }}
@@ -1032,15 +1109,16 @@ export default function ProfilePage() {
                       border: 'none',
                       outline: 'none',
                       cursor: 'pointer',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      padding: '4px 10px',
-                      borderRadius: 'var(--radius-md)',
+                      fontSize: '12px',
+                      fontWeight: projectTypeFilter === 'Project' ? 600 : 500,
+                      padding: '5px 12px',
+                      borderRadius: '7px',
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '5px',
-                      backgroundColor: projectTypeFilter === 'Project' ? 'var(--color-accent)' : 'transparent',
+                      backgroundColor: projectTypeFilter === 'Project' ? 'var(--color-ink-primary)' : 'transparent',
                       color: projectTypeFilter === 'Project' ? '#ffffff' : 'var(--color-ink-secondary)',
+                      boxShadow: projectTypeFilter === 'Project' ? '0 1px 3px rgba(0, 0, 0, 0.12)' : 'none',
                       transition: 'all 0.15s ease',
                     }}
                   >
@@ -1049,9 +1127,10 @@ export default function ProfilePage() {
                     <span
                       style={{
                         fontSize: '10px',
-                        padding: '1px 5px',
+                        padding: '1px 6px',
                         borderRadius: '999px',
-                        backgroundColor: projectTypeFilter === 'Project' ? 'rgba(255,255,255,0.25)' : 'var(--color-bg)',
+                        backgroundColor: projectTypeFilter === 'Project' ? 'rgba(255, 255, 255, 0.22)' : 'var(--color-surface)',
+                        border: projectTypeFilter === 'Project' ? 'none' : '1px solid var(--color-border)',
                         color: projectTypeFilter === 'Project' ? '#ffffff' : 'var(--color-ink-tertiary)',
                         fontWeight: 700,
                       }}
@@ -1067,15 +1146,16 @@ export default function ProfilePage() {
                       border: 'none',
                       outline: 'none',
                       cursor: 'pointer',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      padding: '4px 10px',
-                      borderRadius: 'var(--radius-md)',
+                      fontSize: '12px',
+                      fontWeight: projectTypeFilter === 'Tutorial' ? 600 : 500,
+                      padding: '5px 12px',
+                      borderRadius: '7px',
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '5px',
-                      backgroundColor: projectTypeFilter === 'Tutorial' ? 'var(--color-accent)' : 'transparent',
+                      backgroundColor: projectTypeFilter === 'Tutorial' ? 'var(--color-ink-primary)' : 'transparent',
                       color: projectTypeFilter === 'Tutorial' ? '#ffffff' : 'var(--color-ink-secondary)',
+                      boxShadow: projectTypeFilter === 'Tutorial' ? '0 1px 3px rgba(0, 0, 0, 0.12)' : 'none',
                       transition: 'all 0.15s ease',
                     }}
                   >
@@ -1084,9 +1164,10 @@ export default function ProfilePage() {
                     <span
                       style={{
                         fontSize: '10px',
-                        padding: '1px 5px',
+                        padding: '1px 6px',
                         borderRadius: '999px',
-                        backgroundColor: projectTypeFilter === 'Tutorial' ? 'rgba(255,255,255,0.25)' : 'var(--color-bg)',
+                        backgroundColor: projectTypeFilter === 'Tutorial' ? 'rgba(255, 255, 255, 0.22)' : 'var(--color-surface)',
+                        border: projectTypeFilter === 'Tutorial' ? 'none' : '1px solid var(--color-border)',
                         color: projectTypeFilter === 'Tutorial' ? '#ffffff' : 'var(--color-ink-tertiary)',
                         fontWeight: 700,
                       }}
@@ -1109,19 +1190,29 @@ export default function ProfilePage() {
                     <div
                       key={project.id}
                       style={{
-                        backgroundColor: 'var(--color-paper)',
+                        backgroundColor: 'var(--color-surface)',
                         border: '1px solid var(--color-border)',
-                        borderRadius: '14px',
+                        borderRadius: '16px',
                         overflow: 'hidden',
                         display: 'flex',
                         flexDirection: 'column',
+                        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.03)',
+                        transition: 'transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                        e.currentTarget.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.08)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = 'translateY(0)';
+                        e.currentTarget.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.03)';
                       }}
                     >
                       {/* Cover Thumbnail */}
                       <Link
                         to={`/project/${project.id}`}
                         style={{
-                          height: 140,
+                          height: 155,
                           backgroundColor: '#0f172a',
                           position: 'relative',
                           overflow: 'hidden',
@@ -1140,288 +1231,423 @@ export default function ProfilePage() {
                             <Cpu size={36} style={{ opacity: 0.3 }} />
                           </div>
                         )}
+                        {/* Subtle top gradient shadow for badge readability */}
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            height: 48,
+                            background: 'linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0) 100%)',
+                            pointerEvents: 'none',
+                          }}
+                        />
+
+                        {/* Category Badge */}
                         <span
                           style={{
                             position: 'absolute',
                             top: 10,
                             left: 10,
-                            backgroundColor: 'rgba(0,0,0,0.7)',
+                            backgroundColor: 'rgba(15, 23, 42, 0.8)',
                             color: '#fff',
-                            fontSize: '10px',
+                            fontSize: '9.5px',
                             fontWeight: 700,
                             padding: '3px 8px',
-                            borderRadius: '4px',
+                            borderRadius: '6px',
                             textTransform: 'uppercase',
-                            letterSpacing: '0.05em',
-                            backdropFilter: 'blur(4px)',
+                            letterSpacing: '0.06em',
+                            backdropFilter: 'blur(6px)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
                           }}
                         >
+                          {project.type === 'Tutorial' ? <BookOpen size={10} /> : <Cpu size={10} />}
                           {project.type || 'Project'}
                         </span>
 
-                        {/* Status Badge */}
+                        {/* Status Badge with Live Dot */}
                         <span
                           style={{
                             position: 'absolute',
                             top: 10,
                             right: 10,
                             fontSize: '9.5px',
-                            fontWeight: 800,
+                            fontWeight: 700,
                             padding: '3px 8px',
-                            borderRadius: '4px',
+                            borderRadius: '6px',
                             textTransform: 'uppercase',
-                            letterSpacing: '0.06em',
+                            letterSpacing: '0.05em',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            backdropFilter: 'blur(6px)',
                             backgroundColor:
                               project.status === 'draft'
-                                ? 'rgba(71, 85, 105, 0.9)'
+                                ? 'rgba(51, 65, 85, 0.88)'
                                 : project.status === 'pending_approval'
-                                ? 'rgba(202, 138, 4, 0.95)'
+                                ? 'rgba(180, 83, 9, 0.9)'
                                 : project.status === 'rejected'
-                                ? 'rgba(220, 38, 38, 0.95)'
-                                : 'rgba(22, 163, 74, 0.9)',
-                            color: '#fff',
-                            backdropFilter: 'blur(4px)',
+                                ? 'rgba(185, 28, 28, 0.9)'
+                                : 'rgba(21, 128, 61, 0.9)',
+                            color: '#ffffff',
+                            boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
                           }}
                         >
+                          <span
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: '50%',
+                              backgroundColor:
+                                project.status === 'draft'
+                                  ? '#94a3b8'
+                                  : project.status === 'pending_approval'
+                                  ? '#fde047'
+                                  : project.status === 'rejected'
+                                  ? '#fca5a5'
+                                  : '#4ade80',
+                              display: 'inline-block',
+                            }}
+                          />
                           {project.status === 'pending_approval' ? 'In Review' : (project.status || 'Published')}
                         </span>
                       </Link>
 
-                      {/* Content */}
-                      <div style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', flex: 1 }}>
-                        <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 var(--space-2) 0', color: 'var(--color-ink-primary)', lineHeight: 1.4 }}>
-                          <Link to={`/project/${project.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                      {/* Card Body */}
+                      <div style={{ padding: '14px 16px 12px 16px', display: 'flex', flexDirection: 'column', flex: 1 }}>
+                        <h3 style={{ fontSize: '15px', fontWeight: 700, margin: '0 0 6px 0', lineHeight: 1.35 }}>
+                          <Link
+                            to={`/project/${project.id}`}
+                            style={{ textDecoration: 'none', color: 'var(--color-ink-primary)', transition: 'color 0.15s ease' }}
+                            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--color-accent)'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--color-ink-primary)'; }}
+                          >
                             {project.title}
                           </Link>
                         </h3>
-                        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-ink-secondary)', margin: '0 0 var(--space-4) 0', lineHeight: 1.5, flex: 1, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                        <p style={{ fontSize: '12px', color: 'var(--color-ink-secondary)', margin: '0 0 12px 0', lineHeight: 1.5, flex: 1, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                           {project.description}
                         </p>
 
-                        {/* Stats & Meta row */}
+                        {/* Meta info row */}
                         <div
                           style={{
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
-                            paddingTop: 'var(--space-3)',
-                            marginTop: 'auto',
-                            borderTop: '1px solid var(--color-border)',
                             fontSize: '11px',
                             color: 'var(--color-ink-tertiary)',
+                            marginTop: 'auto',
                           }}
                         >
-                          <span>{project.publishDate || 'Recent'}</span>
-                          <ProjectFlashCount projectId={project.id} initialCount={project.flashCount} />
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <Calendar size={12} style={{ opacity: 0.7 }} />
+                            {project.publishDate || 'Recent'}
+                          </span>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-accent)', fontWeight: 600 }}>
+                            <Zap size={11} />
+                            <ProjectFlashCount projectId={project.id} initialCount={project.flashCount} />
+                          </div>
                         </div>
-
-                        {/* Author Management Action Toolbar */}
-                        {isOwnProfile ? (
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '8px',
-                              padding: 'var(--space-3) var(--space-4)',
-                              borderTop: '1px solid var(--color-border)',
-                              backgroundColor: 'var(--color-surface)',
-                            }}
-                          >
-                            {projectStatusFilter === 'bookmarked' ? (
-                              <>
-                                <Link
-                                  to={`/project/${project.id}`}
-                                  className="btn btn--primary"
-                                  style={{
-                                    flex: 1,
-                                    height: '32px',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '5px',
-                                    fontSize: '12px',
-                                    fontWeight: 600,
-                                    padding: '0 10px',
-                                    borderRadius: '8px',
-                                    textDecoration: 'none',
-                                    boxSizing: 'border-box',
-                                  }}
-                                >
-                                  <Eye size={13} /> View Build
-                                </Link>
-
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    toggleProjectBookmark(project.id, user?.id || profile?.id);
-                                    setBookmarkedProjects(getUserBookmarkedProjects(user?.id || profile?.id));
-                                    toast.info('Removed from bookmarks.');
-                                  }}
-                                  className="btn btn--secondary"
-                                  title="Remove from Bookmarks"
-                                  style={{
-                                    width: '34px',
-                                    height: '32px',
-                                    minWidth: '34px',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    padding: 0,
-                                    borderRadius: '8px',
-                                    color: 'var(--color-accent)',
-                                    boxSizing: 'border-box',
-                                    cursor: 'pointer',
-                                  }}
-                                >
-                                  <Bookmark size={14} fill="currentColor" />
-                                </button>
-                              </>
-                            ) : (role === 'author' || role === 'admin') ? (
-                              <>
-                                <Link
-                                  to={`/projects/edit/${project.id}`}
-                                  className="btn btn--secondary"
-                                  style={{
-                                    flex: 1,
-                                    height: '32px',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '5px',
-                                    fontSize: '12px',
-                                    fontWeight: 600,
-                                    padding: '0 10px',
-                                    borderRadius: '8px',
-                                    textDecoration: 'none',
-                                    boxSizing: 'border-box',
-                                  }}
-                                >
-                                  <Edit3 size={13} /> Edit
-                                </Link>
-
-                                <Link
-                                  to={`/project/${project.id}`}
-                                  className="btn btn--secondary"
-                                  style={{
-                                    flex: 1,
-                                    height: '32px',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '5px',
-                                    fontSize: '12px',
-                                    fontWeight: 600,
-                                    padding: '0 10px',
-                                    borderRadius: '8px',
-                                    textDecoration: 'none',
-                                    boxSizing: 'border-box',
-                                  }}
-                                >
-                                  <Eye size={13} /> View
-                                </Link>
-
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteProject(project.id, project.title)}
-                                  className="btn btn--secondary"
-                                  title="Delete Project"
-                                  style={{
-                                    width: '34px',
-                                    height: '32px',
-                                    minWidth: '34px',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    padding: 0,
-                                    borderRadius: '8px',
-                                    color: 'rgb(220, 38, 38)',
-                                    borderColor: 'rgba(220, 38, 38, 0.25)',
-                                    boxSizing: 'border-box',
-                                    cursor: 'pointer',
-                                  }}
-                                >
-                                  <Trash2 size={13} />
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <Link
-                                  to={`/project/${project.id}`}
-                                  className="btn btn--secondary"
-                                  style={{
-                                    flex: 1,
-                                    height: '32px',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '5px',
-                                    fontSize: '12px',
-                                    fontWeight: 600,
-                                    padding: '0 10px',
-                                    borderRadius: '8px',
-                                    textDecoration: 'none',
-                                    boxSizing: 'border-box',
-                                  }}
-                                >
-                                  <Eye size={13} /> View
-                                </Link>
-
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteProject(project.id, project.title)}
-                                  className="btn btn--secondary"
-                                  title="Delete Project"
-                                  style={{
-                                    width: '34px',
-                                    height: '32px',
-                                    minWidth: '34px',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    padding: 0,
-                                    borderRadius: '8px',
-                                    color: 'rgb(220, 38, 38)',
-                                    borderColor: 'rgba(220, 38, 38, 0.25)',
-                                    boxSizing: 'border-box',
-                                    cursor: 'pointer',
-                                  }}
-                                >
-                                  <Trash2 size={13} />
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        ) : (
-                          <div
-                            style={{
-                              paddingTop: 'var(--space-3)',
-                              marginTop: 'var(--space-2)',
-                              borderTop: '1px solid var(--color-border)',
-                              width: '100%',
-                            }}
-                          >
-                            <Link
-                              to={`/project/${project.id}`}
-                              className="btn btn--secondary"
-                              style={{
-                                width: '100%',
-                                height: '32px',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '5px',
-                                fontSize: '12px',
-                                fontWeight: 600,
-                                borderRadius: '8px',
-                                textDecoration: 'none',
-                                boxSizing: 'border-box',
-                              }}
-                            >
-                              <Eye size={13} /> View Project
-                            </Link>
-                          </div>
-                        )}
                       </div>
+
+                      {/* Flush Card Bottom Action Toolbar */}
+                      {isOwnProfile ? (
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            padding: '10px 14px',
+                            borderTop: '1px solid var(--color-border)',
+                            backgroundColor: 'var(--color-paper)',
+                          }}
+                        >
+                          {projectStatusFilter === 'bookmarked' ? (
+                            <>
+                              <Link
+                                to={`/project/${project.id}`}
+                                style={{
+                                  flex: 1,
+                                  height: '32px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  padding: '0 12px',
+                                  borderRadius: '7px',
+                                  textDecoration: 'none',
+                                  boxSizing: 'border-box',
+                                  backgroundColor: 'var(--color-ink-primary)',
+                                  color: '#ffffff',
+                                  transition: 'all 0.15s ease',
+                                  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.12)',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.opacity = '0.9';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.opacity = '1';
+                                }}
+                              >
+                                <Eye size={13} />
+                                <span>View Build</span>
+                              </Link>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  toggleProjectBookmark(project.id, user?.id ? String(user.id) : undefined, profile?.id ? String(profile.id) : undefined);
+                                  setBookmarkedProjects(getUserBookmarkedProjects(user?.id ? String(user.id) : undefined, profile?.id ? String(profile.id) : undefined));
+                                  toast.info('Removed from bookmarks.');
+                                }}
+                                title="Remove from Bookmarks"
+                                aria-label="Remove from Bookmarks"
+                                style={{
+                                  width: '32px',
+                                  height: '32px',
+                                  minWidth: '32px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  padding: 0,
+                                  borderRadius: '7px',
+                                  border: '1px solid var(--color-border)',
+                                  backgroundColor: 'var(--color-surface)',
+                                  color: 'var(--color-accent)',
+                                  boxSizing: 'border-box',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.08)';
+                                  e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+                                  e.currentTarget.style.color = '#dc2626';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'var(--color-surface)';
+                                  e.currentTarget.style.borderColor = 'var(--color-border)';
+                                  e.currentTarget.style.color = 'var(--color-accent)';
+                                }}
+                              >
+                                <Bookmark size={14} fill="currentColor" />
+                              </button>
+                            </>
+                          ) : (role === 'author' || role === 'admin') ? (
+                            <>
+                              <Link
+                                to={`/project/${project.id}/edit`}
+                                style={{
+                                  flex: 1,
+                                  height: '32px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  padding: '0 12px',
+                                  borderRadius: '7px',
+                                  textDecoration: 'none',
+                                  boxSizing: 'border-box',
+                                  backgroundColor: 'var(--color-surface)',
+                                  border: '1px solid var(--color-border)',
+                                  color: 'var(--color-ink-primary)',
+                                  transition: 'all 0.15s ease',
+                                  boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.borderColor = 'var(--color-ink-tertiary)';
+                                  e.currentTarget.style.backgroundColor = 'var(--color-paper)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.borderColor = 'var(--color-border)';
+                                  e.currentTarget.style.backgroundColor = 'var(--color-surface)';
+                                }}
+                              >
+                                <Edit3 size={13} />
+                                <span>Edit</span>
+                              </Link>
+
+                              <Link
+                                to={`/project/${project.id}`}
+                                style={{
+                                  flex: 1,
+                                  height: '32px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  padding: '0 12px',
+                                  borderRadius: '7px',
+                                  textDecoration: 'none',
+                                  boxSizing: 'border-box',
+                                  backgroundColor: 'var(--color-ink-primary)',
+                                  color: '#ffffff',
+                                  transition: 'all 0.15s ease',
+                                  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.12)',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.opacity = '0.9';
+                                  e.currentTarget.style.transform = 'translateY(-1px)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.opacity = '1';
+                                  e.currentTarget.style.transform = 'translateY(0)';
+                                }}
+                              >
+                                <Eye size={13} />
+                                <span>View</span>
+                              </Link>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteProject(project.id, project.title)}
+                                title="Delete Project"
+                                aria-label={`Delete ${project.title}`}
+                                style={{
+                                  width: '32px',
+                                  height: '32px',
+                                  minWidth: '32px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  padding: 0,
+                                  borderRadius: '7px',
+                                  border: '1px solid transparent',
+                                  backgroundColor: 'transparent',
+                                  color: 'var(--color-ink-tertiary)',
+                                  boxSizing: 'border-box',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.08)';
+                                  e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+                                  e.currentTarget.style.color = '#dc2626';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'transparent';
+                                  e.currentTarget.style.borderColor = 'transparent';
+                                  e.currentTarget.style.color = 'var(--color-ink-tertiary)';
+                                }}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <Link
+                                to={`/project/${project.id}`}
+                                style={{
+                                  flex: 1,
+                                  height: '32px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  padding: '0 12px',
+                                  borderRadius: '7px',
+                                  textDecoration: 'none',
+                                  boxSizing: 'border-box',
+                                  backgroundColor: 'var(--color-ink-primary)',
+                                  color: '#ffffff',
+                                  transition: 'all 0.15s ease',
+                                  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.12)',
+                                }}
+                              >
+                                <Eye size={13} />
+                                <span>View</span>
+                              </Link>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteProject(project.id, project.title)}
+                                title="Delete Project"
+                                aria-label={`Delete ${project.title}`}
+                                style={{
+                                  width: '32px',
+                                  height: '32px',
+                                  minWidth: '32px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  padding: 0,
+                                  borderRadius: '7px',
+                                  border: '1px solid transparent',
+                                  backgroundColor: 'transparent',
+                                  color: 'var(--color-ink-tertiary)',
+                                  boxSizing: 'border-box',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.08)';
+                                  e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+                                  e.currentTarget.style.color = '#dc2626';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'transparent';
+                                  e.currentTarget.style.borderColor = 'transparent';
+                                  e.currentTarget.style.color = 'var(--color-ink-tertiary)';
+                                }}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            padding: '10px 14px',
+                            borderTop: '1px solid var(--color-border)',
+                            backgroundColor: 'var(--color-paper)',
+                          }}
+                        >
+                          <Link
+                            to={`/project/${project.id}`}
+                            style={{
+                              width: '100%',
+                              height: '32px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '6px',
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              padding: '0 12px',
+                              borderRadius: '7px',
+                              textDecoration: 'none',
+                              boxSizing: 'border-box',
+                              backgroundColor: 'var(--color-surface)',
+                              border: '1px solid var(--color-border)',
+                              color: 'var(--color-ink-primary)',
+                              transition: 'all 0.15s ease',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = 'var(--color-ink-primary)';
+                              e.currentTarget.style.color = '#ffffff';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'var(--color-surface)';
+                              e.currentTarget.style.color = 'var(--color-ink-primary)';
+                            }}
+                          >
+                            <Eye size={13} />
+                            <span>View Project</span>
+                          </Link>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

@@ -13,10 +13,8 @@ import {
   Power,
   Layers,
   Activity,
-  Info,
   RotateCcw,
   Check,
-  Sparkles,
 } from 'lucide-react';
 import { ProjectDetail, FirmwareConfig } from '../../config/projectsData';
 import { serialService, ConnectedDeviceInfo } from '../../services/flasher/serialService';
@@ -611,27 +609,6 @@ export default function WebFlasherPanel({ project, onFlashSuccess }: WebFlasherP
               </span>
             </div>
           </div>
-
-          {/* Firmware Note */}
-          {activeFw.versionNote && (
-            <div
-              style={{
-                marginTop: '8px',
-                padding: '8px 10px',
-                borderRadius: '6px',
-                backgroundColor: 'rgba(2, 132, 199, 0.05)',
-                border: '1px solid rgba(2, 132, 199, 0.15)',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '6px',
-              }}
-            >
-              <Info size={13} style={{ color: '#0284c7', flexShrink: 0, marginTop: 1 }} />
-              <p style={{ fontSize: '11px', color: 'var(--color-ink-secondary)', margin: 0, lineHeight: 1.4 }}>
-                {activeFw.versionNote}
-              </p>
-            </div>
-          )}
         </div>
 
         {/* Live Multi-Stage Flashing Progress Bar */}
@@ -1087,28 +1064,6 @@ export default function WebFlasherPanel({ project, onFlashSuccess }: WebFlasherP
               </div>
             </div>
           )}
-        </div>
-
-        {/* Pro Tip / Flashing Guide Footer */}
-        <div
-          style={{
-            marginTop: 'var(--space-4)',
-            padding: '8px 10px',
-            borderRadius: '8px',
-            backgroundColor: 'var(--color-paper)',
-            border: '1px solid var(--color-border)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            fontSize: '11px',
-            color: 'var(--color-ink-tertiary)',
-            lineHeight: 1.4,
-          }}
-        >
-          <Sparkles size={14} style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
-          <span>
-            <strong>Pro-Tip:</strong> If auto-handshake fails, hold <strong>BOOT</strong> on the K10 and click <strong>RESET</strong> once to force ROM download mode.
-          </span>
         </div>
       </div>
 

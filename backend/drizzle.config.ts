@@ -9,7 +9,7 @@ export default {
   out: './src/db/migrations',
   dialect: 'sqlite',
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? './data/k10hub.db',
+    url: `file:${path.resolve(__dirname, './data/k10hub.db').replace(/\\/g, '/')}`,
   },
   verbose: true,
   strict: true,
