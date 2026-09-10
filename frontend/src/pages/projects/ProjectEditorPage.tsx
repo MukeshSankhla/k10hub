@@ -645,7 +645,7 @@ export default function ProjectEditorPage() {
                       });
                     }
                   }}
-                  placeholder="e.g. ESP32-P4 PC Display Station"
+                  placeholder="Ai Buddy - DIY AI Companion"
                   style={{
                     width: '100%',
                     padding: '10px 14px',

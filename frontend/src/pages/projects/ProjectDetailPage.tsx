@@ -137,6 +137,14 @@ export default function ProjectDetailPage() {
   const isAuthor = isProjectAuthor(project, user, profile);
   const canEdit = (role === 'author' || role === 'admin') && isAuthor;
   const parsedVideo = parseVideoEmbedUrl(project.videoLink);
+  const authorInfo = resolveProjectAuthor(project, user, profile);
+  const isMine =
+    authorInfo.isCurrentUser ||
+    (project.authorEmail && (project.authorEmail.toLowerCase() === (profile?.email || user?.email || '').toLowerCase())) ||
+    (project.authorId && (String(project.authorId).toLowerCase() === String(profile?.id || user?.id || '').toLowerCase()));
+  const authorProfileUrl = isMine
+    ? '/profile'
+    : `/profile/${encodeURIComponent(authorInfo.authorId || authorInfo.name)}`;
 
   const handleFlashSuccess = () => {
     setFlashCount((prev) => prev + 1);
@@ -421,24 +429,24 @@ export default function ProjectDetailPage() {
                       <span>{flashCount} Flashes</span>
                     </span>
 
-                    {/* Published Date Badge */}
-                    {project.publishDate && (
+                    {/* Featured Status Badge if project is featured */}
+                    {(project.featured || project.isFeatured) && (
                       <span
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
                           gap: '5px',
                           fontSize: '11px',
-                          fontWeight: 600,
+                          fontWeight: 700,
                           padding: '3px 10px',
                           borderRadius: '6px',
-                          backgroundColor: 'var(--color-paper)',
-                          border: '1px solid var(--color-border)',
-                          color: 'var(--color-ink-secondary)',
+                          backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                          border: '1px solid rgba(245, 158, 11, 0.35)',
+                          color: '#d97706',
                         }}
                       >
-                        <Clock size={13} />
-                        <span>{project.publishDate}</span>
+                        <Star size={13} fill="#f59e0b" color="#f59e0b" />
+                        <span>Featured</span>
                       </span>
                     )}
                   </div>
@@ -469,9 +477,83 @@ export default function ProjectDetailPage() {
                   >
                     {project.description}
                   </p>
+
+                  {/* Creator Byline & Published Date */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      marginTop: 'var(--space-4)',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <Link
+                      to={authorProfileUrl}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        textDecoration: 'none',
+                        color: 'var(--color-ink-primary)',
+                      }}
+                      title={isMine ? 'View your profile' : `View ${authorInfo.name}'s profile`}
+                    >
+                      {authorInfo.avatarUrl ? (
+                        <img
+                          src={authorInfo.avatarUrl}
+                          alt={authorInfo.name}
+                          style={{
+                            width: 24,
+                            height: 24,
+                            borderRadius: '50%',
+                            objectFit: 'cover',
+                            display: 'block',
+                          }}
+                        />
+                      ) : (
+                        <span
+                          style={{
+                            width: 24,
+                            height: 24,
+                            borderRadius: '50%',
+                            backgroundColor: 'var(--color-ink-primary)',
+                            color: '#fff',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          {authorInfo.name.charAt(0)}
+                        </span>
+                      )}
+                      <span style={{ fontSize: '13.5px', fontWeight: 600 }}>{authorInfo.name}</span>
+                      <UserBadge
+                        role={
+                          authorInfo.role?.toLowerCase().includes('admin')
+                            ? 'admin'
+                            : authorInfo.role?.toLowerCase().includes('author') || authorInfo.isCurrentUser
+                            ? 'author'
+                            : 'user'
+                        }
+                        size={14}
+                      />
+                    </Link>
+
+                    {project.publishDate && (
+                      <>
+                        <span style={{ color: 'var(--color-border)', userSelect: 'none' }}>•</span>
+                        <span style={{ fontSize: '12.5px', color: 'var(--color-ink-tertiary)', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                          <Clock size={13} /> Published {project.publishDate}
+                        </span>
+                      </>
+                    )}
+                  </div>
                 </div>
 
-                {/* Bottom Actions Row: Author Button & Action Buttons on Same Line */}
+                {/* Bottom Actions Row: Arranged by Relevance and Aligned */}
                 {(() => {
                   const heroBtnStyle: React.CSSProperties = {
                     display: 'inline-flex',
@@ -484,187 +566,167 @@ export default function ProjectDetailPage() {
                     borderRadius: '8px',
                     boxSizing: 'border-box',
                     textDecoration: 'none',
+                    cursor: 'pointer',
                   };
 
-                  const authorInfo = resolveProjectAuthor(project, user, profile);
-                  const isMine =
-                    authorInfo.isCurrentUser ||
-                    (project.authorEmail && (project.authorEmail.toLowerCase() === (profile?.email || user?.email || '').toLowerCase())) ||
-                    (project.authorId && (String(project.authorId).toLowerCase() === String(profile?.id || user?.id || '').toLowerCase()));
-
-                  const authorProfileUrl = isMine
-                    ? '/profile'
-                    : `/profile/${encodeURIComponent(authorInfo.authorId || authorInfo.name)}`;
+                  const heroIconBtnStyle: React.CSSProperties = {
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: '36px',
+                    height: '36px',
+                    padding: 0,
+                    borderRadius: '8px',
+                    boxSizing: 'border-box',
+                    textDecoration: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  };
 
                   return (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap', marginTop: 'var(--space-6)' }}>
-                      {/* Author Profile Button */}
-                      <Link
-                        to={authorProfileUrl}
-                        className="btn btn--secondary"
-                        style={{
-                          ...heroBtnStyle,
-                          fontWeight: 600,
-                        }}
-                        title={isMine ? 'View your profile' : `View ${authorInfo.name}'s profile`}
-                      >
-                        {authorInfo.avatarUrl ? (
-                          <img
-                            src={authorInfo.avatarUrl}
-                            alt={authorInfo.name}
-                            style={{
-                              width: 20,
-                              height: 20,
-                              borderRadius: '50%',
-                              objectFit: 'cover',
-                              display: 'block',
-                            }}
-                          />
-                        ) : (
-                          <span
-                            style={{
-                              width: 20,
-                              height: 20,
-                              borderRadius: '50%',
-                              backgroundColor: 'var(--color-surface)',
-                              color: 'var(--color-accent)',
-                              fontSize: '11px',
-                              fontWeight: 700,
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 'var(--space-3)',
+                        flexWrap: 'wrap',
+                        marginTop: 'var(--space-6)',
+                        paddingTop: 'var(--space-4)',
+                        borderTop: '1px solid var(--color-border)',
+                      }}
+                    >
+                      {/* Left: Project Links & Management */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        {project.githubLink && (
+                          <a
+                            href={project.githubLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn--secondary"
+                            style={heroBtnStyle}
                           >
-                            {authorInfo.name.charAt(0)}
-                          </span>
+                            <Github size={15} />
+                            <span>GitHub Source</span>
+                          </a>
                         )}
-                        <span>{authorInfo.name}</span>
-                        <UserBadge
-                          role={
-                            authorInfo.role?.toLowerCase().includes('admin')
-                              ? 'admin'
-                              : authorInfo.role?.toLowerCase().includes('author') || authorInfo.isCurrentUser
-                              ? 'author'
-                              : 'user'
-                          }
-                          size={14}
-                        />
-                      </Link>
 
-                      {project.githubLink && (
-                        <a
-                          href={project.githubLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="btn btn--secondary"
-                          style={heroBtnStyle}
-                        >
-                          <Github size={15} />
-                          <span>GitHub Source</span>
-                        </a>
-                      )}
+                        {project.docLink && (
+                          <a
+                            href={project.docLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn--secondary"
+                            style={heroBtnStyle}
+                          >
+                            <ExternalLink size={15} />
+                            <span>Project Guide</span>
+                          </a>
+                        )}
 
-                      {project.docLink && (
-                        <a
-                          href={project.docLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="btn btn--secondary"
-                          style={heroBtnStyle}
-                        >
-                          <ExternalLink size={15} />
-                          <span>Project Guide</span>
-                        </a>
-                      )}
+                        {canEdit && (
+                          <Link
+                            to={`/project/${project.id}/edit`}
+                            className="btn btn--secondary"
+                            title="Edit Project / Tutorial"
+                            style={heroBtnStyle}
+                          >
+                            <Edit3 size={14} />
+                            <span>Edit {project.type || 'Project'}</span>
+                          </Link>
+                        )}
 
-                      {canEdit && (
-                        <Link
-                          to={`/project/${project.id}/edit`}
-                          className="btn btn--secondary"
-                          title="Edit Project / Tutorial"
-                          style={heroBtnStyle}
-                        >
-                          <Edit3 size={15} />
-                          <span>Edit {project.type || 'Project'}</span>
-                        </Link>
-                      )}
+                        {role === 'admin' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              toggleFeaturedProject(project.id);
+                              setCurrentProject(getStoredProjectById(project.id));
+                            }}
+                            className="btn btn--secondary"
+                            style={{
+                              ...heroBtnStyle,
+                              color: (project.featured || project.isFeatured) ? '#d97706' : 'var(--color-ink-secondary)',
+                              backgroundColor: (project.featured || project.isFeatured) ? 'rgba(245, 158, 11, 0.12)' : undefined,
+                              borderColor: (project.featured || project.isFeatured) ? 'rgba(245, 158, 11, 0.4)' : undefined,
+                            }}
+                            title={(project.featured || project.isFeatured) ? 'Unfeature this project' : 'Feature this project on Home'}
+                          >
+                            <Star size={14} fill={(project.featured || project.isFeatured) ? '#f59e0b' : 'none'} color={(project.featured || project.isFeatured) ? '#f59e0b' : 'currentColor'} />
+                            <span>{(project.featured || project.isFeatured) ? 'Featured' : 'Feature'}</span>
+                          </button>
+                        )}
+                      </div>
 
-                      {role === 'admin' && (
+                      {/* Right: Community & Social Icon Buttons (Like, Comment, Bookmark, Share) */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        {/* Like Icon Button */}
                         <button
                           type="button"
-                          onClick={() => {
-                            toggleFeaturedProject(project.id);
-                            setCurrentProject(getStoredProjectById(project.id));
-                          }}
+                          onClick={handleToggleLike}
                           className="btn btn--secondary"
+                          title={isLiked ? `Unlike (${likeCount})` : `Like (${likeCount})`}
+                          aria-label={isLiked ? 'Unlike this project' : 'Like this project'}
                           style={{
-                            ...heroBtnStyle,
-                            color: (project.featured || project.isFeatured) ? '#d97706' : 'var(--color-ink-secondary)',
-                            backgroundColor: (project.featured || project.isFeatured) ? 'rgba(245, 158, 11, 0.12)' : undefined,
-                            borderColor: (project.featured || project.isFeatured) ? 'rgba(245, 158, 11, 0.4)' : undefined,
+                            ...heroIconBtnStyle,
+                            ...(likeCount > 0 ? { width: 'auto', padding: '0 9px', gap: '5px' } : {}),
+                            color: isLiked ? '#ef4444' : 'var(--color-ink-primary)',
+                            backgroundColor: isLiked ? 'rgba(239, 68, 68, 0.08)' : undefined,
+                            borderColor: isLiked ? 'rgba(239, 68, 68, 0.35)' : undefined,
                           }}
-                          title={(project.featured || project.isFeatured) ? 'Unfeature this project' : 'Feature this project on Home'}
                         >
-                          <Star size={15} fill={(project.featured || project.isFeatured) ? '#f59e0b' : 'none'} color={(project.featured || project.isFeatured) ? '#f59e0b' : 'currentColor'} />
-                          <span>{(project.featured || project.isFeatured) ? 'Featured' : 'Feature'}</span>
+                          <Heart size={16} fill={isLiked ? '#ef4444' : 'none'} color={isLiked ? '#ef4444' : 'currentColor'} />
+                          {likeCount > 0 && <span style={{ fontSize: '12px', fontWeight: 600 }}>{likeCount}</span>}
                         </button>
-                      )}
 
-                      {/* Like Button */}
-                      <button
-                        type="button"
-                        onClick={handleToggleLike}
-                        className="btn btn--secondary"
-                        title={isLiked ? 'Unlike' : 'Like this project'}
-                        style={{
-                          ...heroBtnStyle,
-                          color: isLiked ? '#ef4444' : 'var(--color-ink-primary)',
-                          backgroundColor: isLiked ? 'rgba(239, 68, 68, 0.08)' : undefined,
-                          borderColor: isLiked ? 'rgba(239, 68, 68, 0.35)' : undefined,
-                        }}
-                      >
-                        <Heart size={15} fill={isLiked ? '#ef4444' : 'none'} color={isLiked ? '#ef4444' : 'currentColor'} />
-                        <span>{likeCount} {likeCount === 1 ? 'Like' : 'Likes'}</span>
-                      </button>
+                        {/* Comment Icon Button */}
+                        <a
+                          href="#discussion"
+                          className="btn btn--secondary"
+                          title={`Discussion (${commentCount} ${commentCount === 1 ? 'comment' : 'comments'})`}
+                          aria-label="Jump to community discussion"
+                          style={{
+                            ...heroIconBtnStyle,
+                            ...(commentCount > 0 ? { width: 'auto', padding: '0 9px', gap: '5px' } : {}),
+                          }}
+                        >
+                          <MessageSquare size={16} />
+                          {commentCount > 0 && <span style={{ fontSize: '12px', fontWeight: 600 }}>{commentCount}</span>}
+                        </a>
 
-                      {/* Bookmark Button */}
-                      <button
-                        type="button"
-                        onClick={handleToggleBookmark}
-                        className="btn btn--secondary"
-                        title={isBookmarked ? 'Remove from bookmarks' : 'Bookmark this project'}
-                        style={{
-                          ...heroBtnStyle,
-                          color: isBookmarked ? 'var(--color-accent)' : 'var(--color-ink-primary)',
-                          backgroundColor: isBookmarked ? 'var(--color-accent-muted)' : undefined,
-                          borderColor: isBookmarked ? 'var(--color-accent-light)' : undefined,
-                        }}
-                      >
-                        <Bookmark size={15} fill={isBookmarked ? 'var(--color-accent)' : 'none'} color={isBookmarked ? 'var(--color-accent)' : 'currentColor'} />
-                        <span>{isBookmarked ? 'Saved' : 'Bookmark'}</span>
-                      </button>
+                        {/* Bookmark Icon Button */}
+                        <button
+                          type="button"
+                          onClick={handleToggleBookmark}
+                          className="btn btn--secondary"
+                          title={isBookmarked ? 'Remove from bookmarks' : 'Bookmark this project'}
+                          aria-label={isBookmarked ? 'Remove bookmark' : 'Bookmark project'}
+                          style={{
+                            ...heroIconBtnStyle,
+                            color: isBookmarked ? 'var(--color-accent)' : 'var(--color-ink-primary)',
+                            backgroundColor: isBookmarked ? 'var(--color-accent-muted)' : undefined,
+                            borderColor: isBookmarked ? 'var(--color-accent-light)' : undefined,
+                          }}
+                        >
+                          <Bookmark size={16} fill={isBookmarked ? 'var(--color-accent)' : 'none'} color={isBookmarked ? 'var(--color-accent)' : 'currentColor'} />
+                        </button>
 
-                      {/* Jump to Discussion Button */}
-                      <a
-                        href="#discussion"
-                        className="btn btn--secondary"
-                        title="Jump to community discussion"
-                        style={heroBtnStyle}
-                      >
-                        <MessageSquare size={15} />
-                        <span>{commentCount} {commentCount === 1 ? 'Comment' : 'Comments'}</span>
-                      </a>
-
-                      <button
-                        type="button"
-                        onClick={handleShare}
-                        className="btn btn--secondary"
-                        title="Copy Share Link"
-                        style={heroBtnStyle}
-                      >
-                        <Share2 size={15} />
-                        <span>{copiedLink ? 'Link Copied!' : 'Share'}</span>
-                      </button>
+                        {/* Share Icon Button */}
+                        <button
+                          type="button"
+                          onClick={handleShare}
+                          className="btn btn--secondary"
+                          title={copiedLink ? 'Link Copied!' : 'Share this project'}
+                          aria-label="Share this project"
+                          style={{
+                            ...heroIconBtnStyle,
+                            color: copiedLink ? 'var(--color-accent)' : undefined,
+                            borderColor: copiedLink ? 'var(--color-accent)' : undefined,
+                          }}
+                        >
+                          <Share2 size={16} />
+                        </button>
+                      </div>
                     </div>
                   );
                 })()}
