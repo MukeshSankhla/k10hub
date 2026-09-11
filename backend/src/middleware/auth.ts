@@ -24,6 +24,8 @@ export interface DbUser {
   linkedinUrl?: string | null;
   role: UserRole;
   status: UserStatus;
+  isEmailVerified: boolean;
+  emailConfirmedAt?: number | null;
   authorId: number | null;
   createdAt: number | null;
   updatedAt: number | null;
@@ -107,6 +109,10 @@ export async function syncOrProvisionUser(verified: VerifiedAuthUser): Promise<D
     const updateData: Record<string, any> = {
       lastSignInAt: now,
     };
+    if (verified.isEmailVerified && !existing.isEmailVerified) {
+      updateData.isEmailVerified = true;
+      updateData.emailConfirmedAt = verified.emailConfirmedAt || now;
+    }
     if (verified.name && (!existing.name || existing.name === 'Maker' || existing.name.startsWith('user_'))) {
       updateData.name = verified.name.trim().slice(0, 60);
     }
@@ -131,6 +137,8 @@ export async function syncOrProvisionUser(verified: VerifiedAuthUser): Promise<D
         avatarUrl: verified.avatarUrl || null,
         role: initialRole,
         status: 'active',
+        isEmailVerified: verified.isEmailVerified ?? false,
+        emailConfirmedAt: verified.emailConfirmedAt || null,
         lastSignInAt: now,
         createdAt: now,
         updatedAt: now,

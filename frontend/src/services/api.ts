@@ -1,7 +1,8 @@
 // ─── API Client ───────────────────────────────────────────────────────────────
 // Communicates with the K10 Hub backend with automatic Bearer token injection.
 
-const API_BASE = '/api';
+const metaEnv = (import.meta as any).env || {};
+const API_BASE = (metaEnv.VITE_API_BASE_URL || metaEnv.VITE_API_URL || '/api').replace(/\/$/, '');
 
 let getAuthToken: (() => string | null) | null = null;
 
@@ -120,6 +121,8 @@ export interface UserProfile {
   linkedinUrl?: string | null;
   role: UserRole;
   status: UserStatus;
+  isEmailVerified?: boolean;
+  emailConfirmedAt?: number | null;
   authorId?: number | null;
   createdAt: number | null;
   lastSignInAt: number | null;
@@ -300,6 +303,16 @@ export const api = {
     myApplication: () => request<{ application: AuthorApplication | null }>('/auth/my-application'),
     getPublicProfile: (identifier: string) =>
       request<{ user: UserProfile }>(`/auth/profile/${encodeURIComponent(identifier)}`),
+    resendVerification: (email: string) =>
+      request<{ success: boolean; message: string }>('/auth/resend-verification', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      }),
+    verifyEmailOtp: (email: string, token: string, type?: 'signup' | 'email') =>
+      request<{ success: boolean; message: string; session?: any; user?: any }>('/auth/verify-email', {
+        method: 'POST',
+        body: JSON.stringify({ email, token, type: type || 'signup' }),
+      }),
   },
   admin: {
     getStats: () => request<AdminStats>('/admin/stats'),

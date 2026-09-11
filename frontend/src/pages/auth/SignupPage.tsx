@@ -58,7 +58,7 @@ export default function SignupPage() {
     if (res.error) {
       setErrorMessage(res.error);
     } else if (res.confirmationRequired) {
-      setSuccessInfo('Registration successful! Please check your email to confirm your account.');
+      navigate(`/verify-email?email=${encodeURIComponent(trimmedEmail)}`);
     } else {
       navigate('/profile');
     }

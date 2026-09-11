@@ -16,6 +16,7 @@ import communityRoutes from './api/routes/community';
 import notificationRoutes from './api/routes/notifications';
 
 import rateLimit from 'express-rate-limit';
+import compression from 'compression';
 
 const app = express();
 
@@ -24,9 +25,10 @@ if (env.NODE_ENV === 'production') {
   app.set('trust proxy', 1);
 }
 
-// Security and utility middleware
+// Security, compression, and utility middleware
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({ origin: corsOrigins, credentials: true }));
+app.use(compression() as any);
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 
@@ -45,7 +47,7 @@ const globalLimiter = rateLimit({
     message: 'Too many requests from this IP. Please try again later.',
   },
 });
-app.use('/api', globalLimiter);
+app.use('/api', globalLimiter as any);
 
 // Authentication Rate Limiting
 const authLimiter = rateLimit({
@@ -64,7 +66,7 @@ const authLimiter = rateLimit({
 app.use('/api/health', healthRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/categories', categoryRoutes);
-app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/auth', authLimiter as any, authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/community', communityRoutes);
 app.use('/api/notifications', notificationRoutes);
@@ -72,7 +74,15 @@ app.use('/api/notifications', notificationRoutes);
 // Static frontend build serving (production / single-server mode)
 const frontendDist = path.resolve(__dirname, '../../frontend/dist');
 if (fs.existsSync(frontendDist)) {
-  app.use(express.static(frontendDist));
+  app.use(express.static(frontendDist, {
+    maxAge: '1h',
+    setHeaders: (res, filePath) => {
+      // Hashed Vite assets are immutable and can be cached long-term
+      if (filePath.includes(path.sep + 'assets' + path.sep) || filePath.includes('/assets/')) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }));
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) {
       return next();
@@ -96,12 +106,35 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   });
 });
 
+let dbInitPromise: Promise<void> | null = null;
+export function ensureDatabaseReady(): Promise<void> {
+  if (!dbInitPromise) {
+    dbInitPromise = initDatabase().catch((err) => {
+      dbInitPromise = null;
+      throw err;
+    });
+  }
+  return dbInitPromise;
+}
+
+// In serverless environments (e.g. Vercel), ensure DB tables are ready before handling requests
+app.use(async (_req, _res, next) => {
+  try {
+    await ensureDatabaseReady();
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+let serverInstance: any = null;
+
 async function start() {
   try {
     console.log('🔄 Initializing K10 Hub database tables...');
-    await initDatabase();
+    await ensureDatabaseReady();
 
-    app.listen(env.PORT, () => {
+    serverInstance = app.listen(env.PORT, env.HOST, () => {
       console.log(`🚀 K10 Hub API server listening on http://${env.HOST}:${env.PORT}`);
     });
   } catch (error) {
@@ -110,6 +143,29 @@ async function start() {
   }
 }
 
-start();
+// Graceful shutdown handling
+function gracefulShutdown(signal: string) {
+  console.log(`\n🛑 Received ${signal}. Gracefully shutting down K10 Hub server...`);
+  if (serverInstance) {
+    serverInstance.close(() => {
+      console.log('✅ HTTP server closed.');
+      process.exit(0);
+    });
+    setTimeout(() => {
+      console.error('⚠️ Could not close connections in time, forcefully shutting down');
+      process.exit(1);
+    }, 10000);
+  } else {
+    process.exit(0);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Only start listening when not running as a Vercel serverless function
+if (!process.env.VERCEL) {
+  start();
+}
 
 export default app;

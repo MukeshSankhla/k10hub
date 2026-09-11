@@ -162,6 +162,8 @@ export async function initDatabase(): Promise<void> {
       linkedin_url TEXT,
       role TEXT NOT NULL DEFAULT 'user',
       status TEXT NOT NULL DEFAULT 'active',
+      is_email_verified INTEGER NOT NULL DEFAULT 0,
+      email_confirmed_at INTEGER,
       created_at INTEGER DEFAULT (unixepoch()),
       updated_at INTEGER DEFAULT (unixepoch()),
       last_sign_in_at INTEGER
@@ -210,6 +212,8 @@ export async function initDatabase(): Promise<void> {
     'instagram_url TEXT',
     'youtube_url TEXT',
     'linkedin_url TEXT',
+    'is_email_verified INTEGER NOT NULL DEFAULT 0',
+    'email_confirmed_at INTEGER',
   ];
 
   for (const col of userColumns) {
@@ -217,6 +221,27 @@ export async function initDatabase(): Promise<void> {
       await client.execute(`ALTER TABLE users ADD COLUMN ${col}`);
     } catch {
       // Column already exists
+    }
+  }
+
+  // ─── Database Performance Indexes ──────────────────────────────────────────
+  const indexes = [
+    'CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);',
+    'CREATE INDEX IF NOT EXISTS idx_users_supabase_uid ON users(supabase_uid);',
+    'CREATE INDEX IF NOT EXISTS idx_projects_slug ON projects(slug);',
+    'CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);',
+    'CREATE INDEX IF NOT EXISTS idx_projects_author_id ON projects(author_id);',
+    'CREATE INDEX IF NOT EXISTS idx_comments_project_id ON comments(project_id);',
+    'CREATE INDEX IF NOT EXISTS idx_project_likes_project_id ON project_likes(project_id);',
+    'CREATE INDEX IF NOT EXISTS idx_project_bookmarks_user_id ON project_bookmarks(user_id);',
+    'CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);',
+  ];
+
+  for (const idx of indexes) {
+    try {
+      await client.execute(idx);
+    } catch {
+      // Index already exists or created
     }
   }
 }

@@ -32,6 +32,8 @@ export interface VerifiedAuthUser {
   email: string;
   name?: string;
   avatarUrl?: string;
+  isEmailVerified: boolean;
+  emailConfirmedAt: number | null;
 }
 
 /**
@@ -50,6 +52,8 @@ export async function verifyAuthToken(token: string): Promise<{ user: VerifiedAu
         email: 'mukeshdiy1@gmail.com',
         name: 'Mukesh Admin',
         avatarUrl: undefined,
+        isEmailVerified: true,
+        emailConfirmedAt: Math.floor(Date.now() / 1000),
       },
       error: null,
     };
@@ -74,12 +78,18 @@ export async function verifyAuthToken(token: string): Promise<{ user: VerifiedAu
     const name = metadata.full_name || metadata.name || sbUser.email?.split('@')[0] || 'K10 Maker';
     const avatarUrl = metadata.avatar_url || metadata.picture;
 
+    const confirmedStr = sbUser.email_confirmed_at || (sbUser as any).confirmed_at;
+    const emailConfirmedAt = confirmedStr ? Math.floor(new Date(confirmedStr).getTime() / 1000) : null;
+    const isEmailVerified = Boolean(confirmedStr);
+
     return {
       user: {
         uid: sbUser.id,
         email: sbUser.email || '',
         name,
         avatarUrl,
+        isEmailVerified,
+        emailConfirmedAt,
       },
       error: null,
     };

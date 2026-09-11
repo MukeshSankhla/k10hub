@@ -20,13 +20,18 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    sourcemap: false,
+    chunkSizeWarningLimit: 1200,
     rollupOptions: {
       output: {
         manualChunks: {
-          'three': ['three'],
-          'react-three': ['@react-three/fiber', '@react-three/drei'],
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'three-vendor': ['three'],
+          'react-three-vendor': ['@react-three/fiber', '@react-three/drei'],
+          'esptool-vendor': ['esptool-js'],
+          'icons-vendor': ['lucide-react'],
+          'supabase-vendor': ['@supabase/supabase-js'],
+          'markdown-vendor': ['marked'],
         },
       },
     },

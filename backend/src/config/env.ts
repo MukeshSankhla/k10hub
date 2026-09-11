@@ -8,8 +8,9 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(3001),
-  HOST: z.string().default('localhost'),
+  HOST: z.string().default(process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost'),
   DATABASE_URL: z.string().default('./data/k10hub.db'),
+  DATABASE_AUTH_TOKEN: z.string().default(''),
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://localhost:4173'),
   SUPABASE_URL: z.string().default(''),
   SUPABASE_SERVICE_ROLE_KEY: z.string().default(''),

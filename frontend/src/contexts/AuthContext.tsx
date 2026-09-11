@@ -9,10 +9,13 @@ interface AuthContextType {
   application: AuthorApplication | null;
   contributedProjects: ProjectSummary[];
   role: UserRole;
+  isEmailVerified: boolean;
   loading: boolean;
   isConfigured: boolean;
-  signInWithEmail: (email: string, password: string) => Promise<{ error?: string }>;
-  signUpWithEmail: (email: string, password: string, fullName: string) => Promise<{ error?: string; confirmationRequired?: boolean }>;
+  signInWithEmail: (email: string, password: string) => Promise<{ error?: string; isEmailUnconfirmed?: boolean; email?: string }>;
+  signUpWithEmail: (email: string, password: string, fullName: string) => Promise<{ error?: string; confirmationRequired?: boolean; email?: string }>;
+  resendVerificationEmail: (targetEmail?: string) => Promise<{ success: boolean; message?: string; error?: string }>;
+  verifyEmailOtp: (email: string, token: string, type?: 'signup' | 'email') => Promise<{ success: boolean; message?: string; error?: string }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateProfile: (data: Parameters<typeof api.auth.updateProfile>[0]) => Promise<{ success: boolean; message?: string; error?: string }>;
@@ -126,12 +129,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     setLoading(true);
     try {
+      const trimmedEmail = email.trim().toLowerCase();
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
+        email: trimmedEmail,
         password,
       });
       if (error) {
-        return { error: error.message };
+        const msg = error.message;
+        if (msg.toLowerCase().includes('email not confirmed') || msg.toLowerCase().includes('not confirmed')) {
+          return {
+            error: 'Your email address is not verified yet. Please check your inbox or resend the verification email.',
+            isEmailUnconfirmed: true,
+            email: trimmedEmail,
+          };
+        }
+        return { error: msg };
       }
 
       if (data.session) {
@@ -164,7 +176,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const trimmedEmail = email.trim().toLowerCase();
       const trimmedName = fullName.trim();
 
-      // 1. First attempt registration via backend admin API (bypasses SMTP rate limits)
+      // 1. First attempt registration via backend API
       try {
         const regRes = await fetch('/api/auth/register', {
           method: 'POST',
@@ -183,15 +195,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (regRes.ok && regData.success) {
-          // Auto-sign in with the newly confirmed credentials
+          if (regData.confirmationRequired) {
+            return { confirmationRequired: true, email: trimmedEmail };
+          }
+          // Auto-sign in with the credentials if confirmation is not required
           const loginRes = await signInWithEmail(trimmedEmail, password);
           if (loginRes.error) {
-            return { confirmationRequired: false, error: loginRes.error };
+            return { confirmationRequired: false, error: loginRes.error, email: trimmedEmail };
           }
-          return { confirmationRequired: false };
+          return { confirmationRequired: false, email: trimmedEmail };
         }
 
-        if (!regRes.ok && regData.error && regData.error !== 'SUPABASE_NOT_CONFIGURED') {
+        if (!regRes.ok && regData.error && regData.error !== 'AUTH_CONFIG_ERROR') {
           return { error: regData.message || 'Failed to create account.' };
         }
       } catch (backendErr) {
@@ -207,6 +222,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             full_name: trimmedName,
             name: trimmedName,
           },
+          emailRedirectTo: `${window.location.origin}/verify-email`,
         },
       });
 
@@ -224,15 +240,100 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(data.user);
         setAuthTokenGetter(() => activeSession.access_token);
         await fetchBackendProfile(activeSession.access_token);
-        return { confirmationRequired: false };
+        return { confirmationRequired: false, email: trimmedEmail };
       }
 
       // If Supabase project has email confirmation enabled
-      return { confirmationRequired: true };
+      return { confirmationRequired: true, email: trimmedEmail };
     } catch (err: any) {
       return { error: err.message || 'Failed to sign up' };
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Resend Verification Email via backend API with client fallback
+  const resendVerificationEmail = async (targetEmail?: string) => {
+    const emailToUse = (targetEmail || user?.email || profile?.email || '').trim().toLowerCase();
+    if (!emailToUse) {
+      return { success: false, error: 'No email address available to resend verification.' };
+    }
+
+    try {
+      // 1. Attempt backend endpoint
+      try {
+        const res = await api.auth.resendVerification(emailToUse);
+        if (res.success) {
+          return { success: true, message: res.message };
+        }
+      } catch (beErr) {
+        console.warn('Backend resend failed, falling back to Supabase client:', beErr);
+      }
+
+      // 2. Client Supabase fallback
+      if (isSupabaseConfigured && supabase) {
+        const { error } = await supabase.auth.resend({
+          type: 'signup',
+          email: emailToUse,
+          options: {
+            emailRedirectTo: `${window.location.origin}/verify-email`,
+          },
+        });
+        if (error) {
+          return { success: false, error: error.message };
+        }
+        return { success: true, message: `Verification email resent to ${emailToUse}. Please check your inbox.` };
+      }
+      return { success: false, error: 'Authentication service is not configured.' };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to resend verification email.' };
+    }
+  };
+
+  // Verify Email via 6-digit OTP code
+  const verifyEmailOtp = async (email: string, token: string, type: 'signup' | 'email' = 'signup') => {
+    const normalizedEmail = email.trim().toLowerCase();
+    const cleanToken = token.trim();
+
+    try {
+      // 1. Attempt backend verification
+      try {
+        const res = await api.auth.verifyEmailOtp(normalizedEmail, cleanToken, type);
+        if (res.success) {
+          if (res.session) {
+            setUser(res.user);
+            setAuthTokenGetter(() => res.session.access_token);
+            await fetchBackendProfile(res.session.access_token);
+          } else {
+            await fetchBackendProfile();
+          }
+          return { success: true, message: res.message };
+        }
+      } catch (beErr) {
+        console.warn('Backend verify OTP failed, falling back to client Supabase:', beErr);
+      }
+
+      // 2. Client fallback
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase.auth.verifyOtp({
+          email: normalizedEmail,
+          token: cleanToken,
+          type: type as any,
+        });
+        if (error) {
+          return { success: false, error: error.message };
+        }
+        const activeSession = data.session;
+        if (activeSession) {
+          setUser(data.user);
+          setAuthTokenGetter(() => activeSession.access_token);
+          await fetchBackendProfile(activeSession.access_token);
+        }
+        return { success: true, message: 'Email address verified successfully!' };
+      }
+      return { success: false, error: 'Authentication service is not configured.' };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Verification failed.' };
     }
   };
 
@@ -306,6 +407,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const isEmailVerified = Boolean(
+    user?.email_confirmed_at ||
+    (user as any)?.confirmed_at ||
+    profile?.isEmailVerified
+  );
+
   const role: UserRole = !user ? 'unknown' : (profile?.role || 'user');
 
   return (
@@ -316,10 +423,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         application,
         contributedProjects,
         role,
+        isEmailVerified,
         loading,
         isConfigured: isSupabaseConfigured,
         signInWithEmail,
         signUpWithEmail,
+        resendVerificationEmail,
+        verifyEmailOtp,
         signOut,
         refreshProfile,
         updateProfile,

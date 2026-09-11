@@ -109,24 +109,154 @@ router.post('/register', async (req: Request, res: Response) => {
       });
     }
 
+    const isConfirmed = Boolean(data.user?.email_confirmed_at || (data.user as any)?.confirmed_at);
     if (data.user) {
       // Sync into local database
       await syncOrProvisionUser({
         uid: data.user.id,
         email: normalizedEmail,
         name,
+        isEmailVerified: isConfirmed,
+        emailConfirmedAt: isConfirmed ? Math.floor(Date.now() / 1000) : null,
       });
     }
 
     return res.status(201).json({
       success: true,
-      message: 'Account created successfully.',
+      confirmationRequired: !isConfirmed,
+      message: isConfirmed
+        ? 'Account created successfully.'
+        : 'Account created! Please check your email inbox to verify your email address.',
     });
   } catch (error: any) {
     console.error('Registration error:', error);
     return res.status(500).json({
       error: 'SERVER_ERROR',
       message: error.message || 'An unexpected error occurred during registration.',
+    });
+  }
+});
+
+const resendVerificationSchema = z.object({
+  email: z.string().email('Invalid email address'),
+});
+
+/**
+ * POST /api/auth/resend-verification
+ * Resends the account verification email via Supabase
+ */
+router.post('/resend-verification', async (req: Request, res: Response) => {
+  try {
+    const parsed = resendVerificationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        message: parsed.error.issues[0]?.message || 'Please provide a valid email address.',
+      });
+    }
+
+    const { email } = parsed.data;
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return res.status(500).json({
+        error: 'AUTH_CONFIG_ERROR',
+        message: 'Authentication service is not configured.',
+      });
+    }
+
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: normalizedEmail,
+    });
+
+    if (error) {
+      return res.status(400).json({
+        error: 'RESEND_FAILED',
+        message: error.message,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `A verification link has been sent to ${normalizedEmail}. Please check your inbox.`,
+    });
+  } catch (error: any) {
+    console.error('Resend verification error:', error);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: error.message || 'Failed to resend verification email.',
+    });
+  }
+});
+
+const verifyEmailOtpSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  token: z.string().min(4, 'Verification code is required'),
+  type: z.enum(['signup', 'email', 'recovery']).default('signup'),
+});
+
+/**
+ * POST /api/auth/verify-email
+ * Verifies email via OTP code
+ */
+router.post('/verify-email', async (req: Request, res: Response) => {
+  try {
+    const parsed = verifyEmailOtpSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        message: parsed.error.issues[0]?.message || 'Invalid verification details.',
+      });
+    }
+
+    const { email, token, type } = parsed.data;
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return res.status(500).json({
+        error: 'AUTH_CONFIG_ERROR',
+        message: 'Authentication service is not configured.',
+      });
+    }
+
+    const { data, error } = await supabase.auth.verifyOtp({
+      email: normalizedEmail,
+      token: token.trim(),
+      type: type as any,
+    });
+
+    if (error || !data.user) {
+      return res.status(400).json({
+        error: 'VERIFICATION_FAILED',
+        message: error?.message || 'Invalid or expired verification code.',
+      });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+
+    // Sync verified user into database
+    await syncOrProvisionUser({
+      uid: data.user.id,
+      email: normalizedEmail,
+      name: data.user.user_metadata?.full_name || data.user.user_metadata?.name || normalizedEmail.split('@')[0],
+      isEmailVerified: true,
+      emailConfirmedAt: now,
+    });
+
+    return res.json({
+      success: true,
+      message: 'Email address verified successfully!',
+      session: data.session,
+      user: data.user,
+    });
+  } catch (error: any) {
+    console.error('Email verification error:', error);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: error.message || 'Failed to verify email address.',
     });
   }
 });
@@ -174,6 +304,8 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
         linkedinUrl: dbUser.linkedinUrl || null,
         role: dbUser.role,
         status: dbUser.status,
+        isEmailVerified: Boolean(dbUser.isEmailVerified),
+        emailConfirmedAt: dbUser.emailConfirmedAt || null,
         authorId: dbUser.id,
         author: {
           id: dbUser.id,

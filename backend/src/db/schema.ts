@@ -122,6 +122,8 @@ export const users = sqliteTable('users', {
   linkedinUrl: text('linkedin_url'),
   role: text('role', { enum: ['user', 'author', 'admin'] }).notNull().default('user'),
   status: text('status', { enum: ['active', 'suspended'] }).notNull().default('active'),
+  isEmailVerified: integer('is_email_verified', { mode: 'boolean' }).notNull().default(false),
+  emailConfirmedAt: integer('email_confirmed_at'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
   updatedAt: integer('updated_at').default(sql`(unixepoch())`),
   lastSignInAt: integer('last_sign_in_at'),

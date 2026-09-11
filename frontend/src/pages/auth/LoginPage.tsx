@@ -9,16 +9,34 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [unconfirmedEmail, setUnconfirmedEmail] = useState('');
+  const [resendStatus, setResendStatus] = useState('');
+  const [isResending, setIsResending] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const { signInWithEmail, isConfigured } = useAuth();
+  const { signInWithEmail, isConfigured, resendVerificationEmail } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state as any)?.from?.pathname || '/';
 
+  const handleResend = async () => {
+    if (!unconfirmedEmail || isResending) return;
+    setIsResending(true);
+    setResendStatus('');
+    const res = await resendVerificationEmail(unconfirmedEmail);
+    setIsResending(false);
+    if (res.success) {
+      setResendStatus('Verification link resent! Please check your inbox.');
+    } else {
+      setResendStatus(res.error || 'Failed to resend verification email.');
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+    setUnconfirmedEmail('');
+    setResendStatus('');
     setSubmitting(true);
 
     const res = await signInWithEmail(email, password);
@@ -26,6 +44,9 @@ export default function LoginPage() {
 
     if (res.error) {
       setErrorMessage(res.error);
+      if (res.isEmailUnconfirmed) {
+        setUnconfirmedEmail(res.email || email.trim());
+      }
     } else {
       navigate(from, { replace: true });
     }
@@ -89,19 +110,58 @@ export default function LoginPage() {
             {/* Error banner */}
             {errorMessage && (
               <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-                backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                border: '1px solid rgba(239, 68, 68, 0.3)',
-                color: 'rgb(220, 38, 38)',
+                backgroundColor: unconfirmedEmail ? 'rgba(249, 115, 22, 0.08)' : 'rgba(239, 68, 68, 0.1)',
+                border: `1px solid ${unconfirmedEmail ? 'rgba(249, 115, 22, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                color: unconfirmedEmail ? 'rgb(194, 65, 12)' : 'rgb(220, 38, 38)',
                 padding: 'var(--space-3) var(--space-4)',
                 borderRadius: 'var(--radius-md)',
                 fontSize: 'var(--text-sm)',
                 marginBottom: 'var(--space-4)',
               }}>
-                <AlertCircle size={18} style={{ flexShrink: 0 }} />
-                <span>{errorMessage}</span>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
+                  <AlertCircle size={18} style={{ flexShrink: 0, marginTop: 2 }} />
+                  <div style={{ flex: 1 }}>
+                    <span>{errorMessage}</span>
+                    {unconfirmedEmail && (
+                      <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={handleResend}
+                          disabled={isResending}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: 'var(--color-accent)',
+                            fontWeight: 700,
+                            textDecoration: 'underline',
+                            cursor: isResending ? 'not-allowed' : 'pointer',
+                            padding: 0,
+                            fontSize: 'var(--text-xs)',
+                          }}
+                        >
+                          {isResending ? 'Sending...' : 'Resend verification email'}
+                        </button>
+                        <span style={{ opacity: 0.5 }}>|</span>
+                        <Link
+                          to={`/verify-email?email=${encodeURIComponent(unconfirmedEmail)}`}
+                          style={{
+                            color: 'var(--color-accent)',
+                            fontWeight: 700,
+                            textDecoration: 'underline',
+                            fontSize: 'var(--text-xs)',
+                          }}
+                        >
+                          Enter verification code &rarr;
+                        </Link>
+                      </div>
+                    )}
+                    {resendStatus && (
+                      <div style={{ marginTop: '0.4rem', fontSize: 'var(--text-xs)', color: 'rgb(22, 163, 74)', fontWeight: 600 }}>
+                        {resendStatus}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 

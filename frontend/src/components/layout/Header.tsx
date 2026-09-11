@@ -16,6 +16,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import UserBadge from '../common/UserBadge';
 import NotificationBell from '../notifications/NotificationBell';
+import EmailVerificationBanner from '../auth/EmailVerificationBanner';
 import { getPublicProjects, resolveProjectAuthor } from '../../services/projects/projectStorageService';
 
 const NAV_LINKS = [
@@ -146,6 +147,7 @@ export default function Header() {
 
   return (
     <>
+      <EmailVerificationBanner />
       <header className={`nav ${scrolled ? 'nav--scrolled' : ''}`} role="banner">
         <div className="container nav__inner">
           {/* Left: Brand Wordmark + Navigation Links aligned together */}

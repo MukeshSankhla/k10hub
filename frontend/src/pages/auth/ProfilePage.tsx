@@ -102,6 +102,7 @@ export default function ProfilePage() {
     profile,
     application,
     role,
+    isEmailVerified,
     loading,
     signOut,
     applyAuthor,
@@ -714,9 +715,46 @@ export default function ProfilePage() {
                     <UserBadge role={roleToDisplay} size={20} />
                   </div>
 
-                  <p style={{ color: 'var(--color-ink-secondary)', fontSize: 'var(--text-sm)', marginTop: 'var(--space-1)', margin: 0 }}>
-                    {isOwnProfile ? displayEmail : `${publicAuthorProjects.length} Contributed Build(s)`}
-                  </p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginTop: 'var(--space-1)', flexWrap: 'wrap' }}>
+                    <p style={{ color: 'var(--color-ink-secondary)', fontSize: 'var(--text-sm)', margin: 0 }}>
+                      {isOwnProfile ? displayEmail : `${publicAuthorProjects.length} Contributed Build(s)`}
+                    </p>
+                    {isOwnProfile && displayEmail && (
+                      isEmailVerified ? (
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '3px',
+                          fontSize: '11px',
+                          color: '#16a34a',
+                          backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                          padding: '2px 8px',
+                          borderRadius: '12px',
+                          fontWeight: 600,
+                        }}>
+                          <CheckCircle2 size={12} /> Verified
+                        </span>
+                      ) : (
+                        <Link
+                          to={`/verify-email?email=${encodeURIComponent(displayEmail)}`}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                            fontSize: '11px',
+                            color: '#d97706',
+                            backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            fontWeight: 600,
+                            textDecoration: 'none',
+                          }}
+                        >
+                          <AlertCircle size={12} /> Unverified &bull; Verify now
+                        </Link>
+                      )
+                    )}
+                  </div>
                 </div>
               </div>
 
